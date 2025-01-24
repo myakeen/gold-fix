@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-
 #[derive(Debug, Clone)]
 pub struct Field {
     tag: i32,
@@ -106,19 +103,21 @@ pub const END_SEQ_NO: i32 = 16;
 
 // Common values for fields
 pub mod values {
+    use once_cell::sync::Lazy;
     use std::collections::HashSet;
-    use std::sync::Arc;
 
     // Common message types for pool initialization
-    pub static COMMON_MESSAGE_TYPES: Arc<Vec<&'static str>> = Arc::new(vec![
-        NEW_ORDER_SINGLE,
-        EXECUTION_REPORT,
-        QUOTE_REQUEST,
-        MARKET_DATA_REQUEST,
-        MARKET_DATA_SNAPSHOT,
-        QUOTE,
-        HEARTBEAT,
-    ]);
+    pub static COMMON_MESSAGE_TYPES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+        let mut types = HashSet::new();
+        types.insert(NEW_ORDER_SINGLE);
+        types.insert(EXECUTION_REPORT);
+        types.insert(QUOTE_REQUEST);
+        types.insert(MARKET_DATA_REQUEST);
+        types.insert(MARKET_DATA_SNAPSHOT);
+        types.insert(QUOTE);
+        types.insert(HEARTBEAT);
+        types
+    });
 
     // Message types
     pub const HEARTBEAT: &str = "0";

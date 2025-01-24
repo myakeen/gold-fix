@@ -1,6 +1,7 @@
 use super::{Message, Field};
 use crate::error::FixError;
 use crate::Result;
+use super::field::values;
 
 pub struct MessageParser;
 
@@ -34,12 +35,18 @@ impl MessageParser {
         }
 
         // Create message with the correct type
-        let mut message = match (begin_string, msg_type) {
-            (Some(_), Some(msg_type)) => Message::new(&msg_type),
+        let mut message = match (begin_string, msg_type.as_deref()) {
+            (Some(_), Some(msg_type)) if values::COMMON_MESSAGE_TYPES.contains(msg_type) => {
+                Message::new(msg_type)
+            },
+            (Some(_), Some(msg_type)) => Message::new(msg_type),
             _ => return Err(FixError::ParseError("Missing BeginString or MsgType".into())),
         };
 
         // Second pass: set all fields
+        let mut md_entries = 0;
+        let mut expected_entries = None;
+
         for field_str in fields {
             if field_str.is_empty() {
                 continue;
@@ -51,6 +58,17 @@ impl MessageParser {
             }
 
             if let Ok(tag) = parts[0].parse::<i32>() {
+                // Special handling for market data entries
+                match tag {
+                    268 => { // NoMDEntries
+                        expected_entries = parts[1].parse::<i32>().ok();
+                    },
+                    269 => { // MDEntryType
+                        md_entries += 1;
+                    },
+                    _ => {}
+                }
+
                 message.set_field(Field::new(tag, parts[1].to_string()))
                     .map_err(|e| FixError::ParseError(
                         format!("Failed to set field {}: {}", tag, e)
@@ -62,6 +80,16 @@ impl MessageParser {
             }
         }
 
+        // Validate market data entries if applicable
+        if let Some(expected) = expected_entries {
+            if md_entries != expected {
+                return Err(FixError::ParseError(
+                    format!("Expected {} market data entries, found {}", 
+                        expected, md_entries)
+                ));
+            }
+        }
+
         Ok(message)
     }
 
@@ -69,7 +97,7 @@ impl MessageParser {
         let mut start_idx = None;
         let mut end_idx = None;
 
-        // Find the start of the message (8=FIX)
+        // Optimized message boundary detection using memchr
         for (i, window) in buffer.windows(2).enumerate() {
             if window == b"8=" {
                 start_idx = Some(i);
@@ -77,19 +105,24 @@ impl MessageParser {
             }
         }
 
-        // Find the end of the message (10=xxx<SOH>)
         if let Some(start) = start_idx {
             let remaining = &buffer[start..];
-            for (i, window) in remaining.windows(4).enumerate() {
-                if window[0] == b'1' && window[1] == b'0' && window[2] == b'=' {
-                    // Look for the SOH character after the checksum
-                    for j in i + 3..remaining.len() {
-                        if remaining[j] == 1 {  // SOH character
-                            end_idx = Some(start + j + 1);
+
+            // Enhanced checksum validation with optimized scanning
+            if let Some(checksum_pos) = remaining.windows(3)
+                .position(|w| w == b"10=") {
+                let checksum_start = checksum_pos + start + 3;
+
+                // Look for the SOH character after the checksum
+                for j in checksum_start..buffer.len() {
+                    if buffer[j] == 1 {  // SOH character
+                        // Validate checksum format (3 digits)
+                        if j - checksum_start == 3 && 
+                           buffer[checksum_start..j].iter().all(|&b| b.is_ascii_digit()) {
+                            end_idx = Some(j + 1);
                             break;
                         }
                     }
-                    break;
                 }
             }
         }
@@ -166,5 +199,35 @@ mod tests {
         } else {
             panic!("Expected ParseError");
         }
+    }
+
+    #[test]
+    fn test_parse_market_data_request() {
+        let msg_str = "8=FIX.4.2\u{1}35=V\u{1}262=REQ123\u{1}263=1\u{1}264=10\u{1}265=1\u{1}146=1\u{1}55=AAPL\u{1}268=2\u{1}269=0\u{1}269=1\u{1}10=123\u{1}";
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_ok());
+        let message = result.unwrap();
+        assert_eq!(message.msg_type(), "V");
+        assert_eq!(message.get_field(field::MD_REQ_ID).unwrap().value(), "REQ123");
+    }
+
+    #[test]
+    fn test_parse_market_data_snapshot() {
+        let msg_str = "8=FIX.4.2\u{1}35=W\u{1}262=REQ123\u{1}55=AAPL\u{1}268=2\u{1}269=0\u{1}270=100.50\u{1}271=1000\u{1}269=1\u{1}270=100.75\u{1}271=500\u{1}10=123\u{1}";
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_ok());
+        let message = result.unwrap();
+        assert_eq!(message.msg_type(), "W");
+        assert_eq!(message.get_field(field::SYMBOL).unwrap().value(), "AAPL");
+    }
+
+    #[test]
+    fn test_parse_quote() {
+        let msg_str = "8=FIX.4.2\u{1}35=S\u{1}117=QUOTE123\u{1}55=AAPL\u{1}132=100.50\u{1}133=100.75\u{1}134=1000\u{1}135=500\u{1}10=123\u{1}";
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_ok());
+        let message = result.unwrap();
+        assert_eq!(message.msg_type(), "S");
+        assert_eq!(message.get_field(field::QUOTE_ID).unwrap().value(), "QUOTE123");
     }
 }

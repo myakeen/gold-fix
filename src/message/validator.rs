@@ -147,6 +147,58 @@ impl MessageValidator {
         Ok(())
     }
 
+    fn validate_market_data_request(message: &Message) -> Result<()> {
+        // Required fields for market data request
+        if message.get_field(field::SYMBOL).is_none() {
+            return Err(FixError::ParseError("Symbol is required for market data requests".into()));
+        }
+
+        // Validate subscription type
+        if let Some(sub_type) = message.get_field(field::SUBSCRIPTION_REQ_TYPE) {
+            let sub_type_val = sub_type.value().parse::<i32>()
+                .map_err(|_| FixError::ParseError("Invalid SubscriptionRequestType".into()))?;
+            if !(0..=2).contains(&sub_type_val) {
+                return Err(FixError::ParseError("Invalid SubscriptionRequestType value".into()));
+            }
+        }
+
+        // Validate market depth
+        if let Some(depth) = message.get_field(field::MARKET_DEPTH) {
+            let depth_val = depth.value().parse::<i32>()
+                .map_err(|_| FixError::ParseError("Invalid MarketDepth".into()))?;
+            if depth_val < 0 {
+                return Err(FixError::ParseError("MarketDepth must be non-negative".into()));
+            }
+        }
+
+        // Validate NoMDEntryTypes
+        if let Some(no_entries) = message.get_field(field::NO_MD_ENTRIES) {
+            let expected_count = no_entries.value().parse::<usize>()
+                .map_err(|_| FixError::ParseError("Invalid NoMDEntries".into()))?;
+
+            let mut entry_types = HashSet::new();
+            for (&tag, field) in message.fields() {
+                if tag == field::MD_ENTRY_TYPE {
+                    if !Self::is_valid_md_entry_type(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid MDEntryType: {}", field.value())
+                        ));
+                    }
+                    entry_types.insert(field.value());
+                }
+            }
+
+            if entry_types.len() != expected_count {
+                return Err(FixError::ParseError(
+                    format!("Expected {} MD entry types, found {}", 
+                        expected_count, entry_types.len())
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     fn validate_market_data_snapshot(message: &Message) -> Result<()> {
         // Validate number of entries matches actual entries
         if let Some(no_entries) = message.get_field(field::NO_MD_ENTRIES) {
@@ -156,10 +208,30 @@ impl MessageValidator {
             let mut actual_count = 0;
             let mut entry_type_seen = false;
 
-            for (&tag, _) in message.fields() {
+            for (&tag, field) in message.fields() {
                 if tag == field::MD_ENTRY_TYPE {
                     entry_type_seen = true;
                     actual_count += 1;
+
+                    // Validate each entry has required fields
+                    if !Self::is_valid_md_entry_type(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid MDEntryType: {}", field.value())
+                        ));
+                    }
+
+                    // Check for corresponding price and size
+                    let entry_index = actual_count - 1;
+                    let has_price = message.fields().iter()
+                        .any(|(&t, _)| t == field::MD_ENTRY_PX);
+                    let has_size = message.fields().iter()
+                        .any(|(&t, _)| t == field::MD_ENTRY_SIZE);
+
+                    if !has_price || !has_size {
+                        return Err(FixError::ParseError(
+                            format!("Missing price or size for entry {}", entry_index)
+                        ));
+                    }
                 }
             }
 
@@ -191,6 +263,29 @@ impl MessageValidator {
         // If offer present, must have offer size
         if message.get_field(field::OFFER_PX).is_some() && message.get_field(field::OFFER_SIZE).is_none() {
             return Err(FixError::ParseError("OfferSize is required when OfferPx is present".into()));
+        }
+
+        // Validate price and size values
+        if let Some(bid_px) = message.get_field(field::BID_PX) {
+            if bid_px.value().parse::<f64>().is_err() {
+                return Err(FixError::ParseError("Invalid BidPx value".into()));
+            }
+        }
+
+        if let Some(offer_px) = message.get_field(field::OFFER_PX) {
+            if offer_px.value().parse::<f64>().is_err() {
+                return Err(FixError::ParseError("Invalid OfferPx value".into()));
+            }
+        }
+
+        // Validate bid <= offer if both present
+        if let (Some(bid_px), Some(offer_px)) = (
+            message.get_field(field::BID_PX).and_then(|f| f.value().parse::<f64>().ok()),
+            message.get_field(field::OFFER_PX).and_then(|f| f.value().parse::<f64>().ok())
+        ) {
+            if bid_px > offer_px {
+                return Err(FixError::ParseError("BidPx cannot be greater than OfferPx".into()));
+            }
         }
 
         Ok(())
@@ -369,16 +464,6 @@ impl MessageValidator {
         }
         Ok(())
     }
-
-    fn validate_market_data_request(message: &Message) -> Result<()> {
-        // Symbol and subscription type are required
-        if message.get_field(field::SYMBOL).is_none() {
-            return Err(FixError::ParseError("Symbol is required for market data requests".into()));
-        }
-        Ok(())
-    }
-
-
 }
 
 #[cfg(test)]

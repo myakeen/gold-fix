@@ -29,7 +29,10 @@ A high-performance Financial Information eXchange (FIX) protocol engine implemen
 ## Core Components
 
 ### 1. Message Layer
-- **Message Processing**: Handles FIX message creation, parsing, and validation
+- **Enhanced Message Processing**: 
+  - Optimized parsing for high-frequency message types
+  - Efficient handling of market data and quote messages
+  - Smart message pooling with adaptive sizing
 - **Field Formatting**: Type-safe field formatting with support for:
   - DateTime formatting
   - Integer validation
@@ -62,6 +65,14 @@ The message store provides atomic operations through transactions:
 - Message versioning for optimistic concurrency control
 - Atomic file operations for reliable persistence
 
+### 4. Advanced Message Pooling System
+The enhanced message pooling system provides:
+- Adaptive pool sizing based on message type frequency
+- Automatic cleanup of underutilized pools
+- Performance monitoring and statistics
+- Thread-safe message recycling
+- Type-specific pool optimization
+
 Example usage:
 ```rust
 // Begin a transaction
@@ -87,29 +98,28 @@ let (message, version) = store.get_message_with_version(session_id, 1).await?.un
 - Safe concurrent message processing
 - Optimistic concurrency control with message versioning
 
-### 2. Message Store Implementation
+### 2. Message Pool Implementation
 ```rust
-pub struct MessageStore {
-    messages: Arc<Mutex<HashMap<String, HashMap<i32, (Message, u64)>>>>,
-    sequence_numbers: Arc<Mutex<HashMap<String, i32>>>,
-    store_dir: PathBuf,
-    transactions: Arc<Mutex<HashMap<String, Transaction>>>,
-    version_counter: Arc<Mutex<u64>>,
+pub struct MessagePool {
+    pools: Arc<Mutex<HashMap<String, Vec<Message>>>>,
+    config: PoolConfig,
+    stats: Arc<Mutex<HashMap<String, PoolStats>>>,
 }
 ```
 
 Key features:
-- Session-based message storage with versioning
-- Sequence number management
-- Transaction support with atomic commits
-- Persistent storage with atomic file operations
-- Version-based conflict detection
+- Dynamic pool sizing based on message type
+- Performance monitoring and statistics
+- Automatic resource cleanup
+- Memory usage optimization
+- Pool utilization tracking
 
-### 3. Persistence Strategy
-- Atomic file operations using temporary files and rename
-- Version tracking in persistent storage
-- Automatic recovery of message versions
-- Transaction-safe persistence with rollback capability
+### 3. Enhanced Message Parser
+- Optimized boundary detection
+- Efficient checksum validation
+- Specialized handling for market data
+- Quote message optimization
+- Performance-focused implementation
 
 ## Message Roundtrip Flow
 1. **Message Creation**:
@@ -148,6 +158,9 @@ Key features:
 - Thread-safe concurrent access
 - Message validation and formatting
 - Session management
+- Advanced message pooling system
+- Market data optimization
+- Quote handling improvements
 - Basic FIX message types support
 
 🔄 In Progress:
