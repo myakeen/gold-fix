@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
+use std::path::PathBuf;
 
 use crate::config::SessionConfig;
 use crate::logging::Logger;
@@ -29,7 +30,12 @@ impl Session {
         store: Arc<MessageStore>,
         message_pool: Arc<MessagePool>,  // Add message_pool parameter
     ) -> Self {
+        let session_id = format!("{}_{}", config.sender_comp_id, config.target_comp_id);
+        let store_dir = PathBuf::from("store/sessions");
+
         let state = state::SessionState::with_config(
+            &session_id,
+            store_dir,
             10,  // logon timeout
             config.heart_bt_int as u64,
             2,   // test request delay
@@ -293,6 +299,55 @@ impl Session {
         let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
         let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
         msg
+    }
+
+    // Add recovery functionality to the Session implementation
+    pub async fn recover(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+
+        // Load persisted messages from store
+        let session_id = format!("{}_{}", self.config.sender_comp_id, self.config.target_comp_id);
+        self.store.load_messages(&session_id).await?;
+
+        // Reset sequence numbers if configured
+        if self.config.reset_on_disconnect {
+            state.reset_sequence_numbers();
+            self.store.reset_sequence_numbers(&session_id).await?;
+        }
+
+        // Attempt to reconnect
+        if let Some(transport) = self.transport.lock().await.as_mut() {
+            let logout = self.create_logout_message().await;
+            let _ = transport.send(&logout).await;  // Best effort logout
+        }
+
+        // Clear existing transport
+        *self.transport.lock().await = None;
+
+        // Update state for recovery
+        state.set_status(state::Status::Recovering);
+
+        // Attempt to establish new connection
+        match TcpStream::connect(&self.config.target_addr).await {
+            Ok(stream) => {
+                let transport = Transport::new(stream);
+                *self.transport.lock().await = Some(transport);
+
+                // Initiate new logon sequence
+                drop(state);
+                self.initiate_logon().await?;
+
+                // Start heartbeat monitoring and message processing
+                self.start_heartbeat_monitor().await;
+                self.start_message_processor().await;
+
+                Ok(())
+            },
+            Err(e) => {
+                state.set_status(state::Status::Error);
+                Err(e.into())
+            }
+        }
     }
 }
 

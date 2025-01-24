@@ -1,0 +1,14 @@
+{
+  "status": "Created",
+  "next_outgoing_seq": 1,
+  "next_incoming_seq": 1,
+  "expected_target_seq_num": 1,
+  "last_send_time": 0,
+  "last_receive_time": 0,
+  "test_request_counter": 0,
+  "logon_timeout": 10,
+  "heartbeat_interval": 30,
+  "test_request_delay": 2,
+  "session_id": "SENDER_TARGET",
+  "store_dir": "store/sessions"
+}

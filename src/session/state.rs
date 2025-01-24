@@ -4,7 +4,6 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 use crate::Result;
-use crate::error::FixError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Status {
@@ -194,7 +193,7 @@ impl SessionState {
         match self.status {
             Status::InitiateLogon => now - self.last_send_time > self.logon_timeout,
             Status::Connected => {
-                self.test_request_counter >= 2 || 
+                self.test_request_counter >= 2 ||
                 now - self.last_receive_time > 2 * self.heartbeat_interval
             },
             _ => false,

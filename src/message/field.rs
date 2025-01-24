@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
 #[derive(Debug, Clone)]
 pub struct Field {
     tag: i32,
@@ -46,6 +49,34 @@ pub const TIME_IN_FORCE: i32 = 59;
 pub const QUANTITY: i32 = 38;
 pub const PRICE: i32 = 44;
 
+// Market Data Fields
+pub const MD_REQ_ID: i32 = 262;
+pub const SUBSCRIPTION_REQ_TYPE: i32 = 263;
+pub const MARKET_DEPTH: i32 = 264;
+pub const MD_UPDATE_TYPE: i32 = 265;
+pub const AGGREGATE_BOOK: i32 = 266;
+pub const NO_MD_ENTRIES: i32 = 268;
+pub const MD_ENTRY_TYPE: i32 = 269;
+pub const MD_ENTRY_PX: i32 = 270;
+pub const MD_ENTRY_SIZE: i32 = 271;
+pub const MD_ENTRY_DATE: i32 = 272;
+pub const MD_ENTRY_TIME: i32 = 273;
+pub const TRADING_SESSION_ID: i32 = 336;
+
+// Quote Fields
+pub const QUOTE_ID: i32 = 117;
+pub const QUOTE_REQ_ID: i32 = 131;
+pub const BID_PX: i32 = 132;
+pub const OFFER_PX: i32 = 133;
+pub const BID_SIZE: i32 = 134;
+pub const OFFER_SIZE: i32 = 135;
+pub const VALID_UNTIL_TIME: i32 = 62;
+pub const QUOTE_CONDITION: i32 = 276;
+pub const MIN_QUOTE_LIFE: i32 = 110;
+pub const NO_QUOTE_ENTRIES: i32 = 295;
+pub const QUOTE_ENTRY_ID: i32 = 299;
+pub const QUOTE_REJECT_REASON: i32 = 300;
+
 // Additional Order Fields
 pub const TEXT: i32 = 58;
 pub const TRANSACTION_TIME: i32 = 60;
@@ -75,6 +106,20 @@ pub const END_SEQ_NO: i32 = 16;
 
 // Common values for fields
 pub mod values {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    // Common message types for pool initialization
+    pub static COMMON_MESSAGE_TYPES: Arc<Vec<&'static str>> = Arc::new(vec![
+        NEW_ORDER_SINGLE,
+        EXECUTION_REPORT,
+        QUOTE_REQUEST,
+        MARKET_DATA_REQUEST,
+        MARKET_DATA_SNAPSHOT,
+        QUOTE,
+        HEARTBEAT,
+    ]);
+
     // Message types
     pub const HEARTBEAT: &str = "0";
     pub const TEST_REQUEST: &str = "1";
@@ -87,14 +132,26 @@ pub mod values {
     pub const ORDER_CANCEL_REQUEST: &str = "F";
     pub const EXECUTION_REPORT: &str = "8";
 
+    // Market Data Message Types
+    pub const MARKET_DATA_REQUEST: &str = "V";
+    pub const MARKET_DATA_SNAPSHOT: &str = "W";
+    pub const MARKET_DATA_INCREMENT_REFRESH: &str = "X";
+    pub const MARKET_DATA_REQUEST_REJECT: &str = "Y";
+    pub const SECURITY_STATUS: &str = "f";
+    pub const TRADING_SESSION_STATUS: &str = "h";
+
+    // Quote Message Types
+    pub const QUOTE_REQUEST: &str = "R";
+    pub const QUOTE: &str = "S";
+    pub const QUOTE_CANCEL: &str = "Z";
+    pub const QUOTE_REQUEST_REJECT: &str = "AG";
+    pub const MASS_QUOTE: &str = "i";
+    pub const MASS_QUOTE_ACKNOWLEDGEMENT: &str = "b";
+
     // Additional Message Types
     pub const ORDER_CANCEL_REPLACE_REQUEST: &str = "G";
     pub const ORDER_STATUS_REQUEST: &str = "H";
     pub const ORDER_MASS_CANCEL_REQUEST: &str = "q";
-    pub const QUOTE_REQUEST: &str = "R";
-    pub const QUOTE: &str = "S";
-    pub const MARKET_DATA_REQUEST: &str = "V";
-    pub const MARKET_DATA_SNAPSHOT: &str = "W";
     pub const SECURITY_DEFINITION_REQUEST: &str = "c";
     pub const SECURITY_DEFINITION: &str = "d";
     pub const TRADE_CAPTURE_REPORT: &str = "AE";
@@ -106,6 +163,24 @@ pub mod values {
     pub const SELL_PLUS: &str = "4";
     pub const SELL_SHORT: &str = "5";
     pub const SELL_SHORT_EXEMPT: &str = "6";
+
+    // Market Data Entry Types
+    pub const MD_ENTRY_BID: &str = "0";
+    pub const MD_ENTRY_OFFER: &str = "1";
+    pub const MD_ENTRY_TRADE: &str = "2";
+    pub const MD_ENTRY_INDEX: &str = "3";
+    pub const MD_ENTRY_OPENING: &str = "4";
+    pub const MD_ENTRY_CLOSING: &str = "5";
+    pub const MD_ENTRY_HIGH: &str = "7";
+    pub const MD_ENTRY_LOW: &str = "8";
+
+    // Quote Conditions
+    pub const QUOTE_OPEN: &str = "A";
+    pub const QUOTE_CLOSED: &str = "B";
+    pub const QUOTE_OUTRIGHT: &str = "C";
+    pub const QUOTE_CROSS: &str = "D";
+    pub const QUOTE_LOCKED: &str = "E";
+    pub const QUOTE_CROSSED: &str = "F";
 
     // Order types
     pub const MARKET: &str = "1";
