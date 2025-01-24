@@ -5,7 +5,7 @@ A high-performance Financial Information eXchange (FIX) protocol engine implemen
 ## Technical Architecture
 
 ```
-                                  GoldFix
+                                   GoldFix
                                       |
                  +--------------------+--------------------+
                  |                    |                    |
@@ -13,8 +13,8 @@ A high-performance Financial Information eXchange (FIX) protocol engine implemen
                  |                    |                    |
         +--------+--------+    +------+------+     +------+------+
         |    Messages     |    |   Sessions   |     |  Transport   |
-        |    Validation   |    |   Heartbeat  |     |    TCP/IP    |
-        |    Formatting   |    |   Sequence   |     |  Messaging   |
+        |    Validation   |    |   Heartbeat  |     |    SSL/TLS   |
+        |    Formatting   |    |   Sequence   |     |  Socket Mgmt |
         +--------+--------+    +------+------+     +------+------+
                  |                    |                    |
                  |             Message Store               |
@@ -56,7 +56,24 @@ A high-performance Financial Information eXchange (FIX) protocol engine implemen
   - Message sequencing
   - Session recovery
 
-### 3. Message Store with Transaction Support
+### 3. Advanced Transport Layer
+- **SSL/TLS Support**:
+  - Certificate-based authentication
+  - Custom CA support
+  - Client certificate handling
+  - Secure socket management
+- **Socket Management**:
+  - Efficient buffer handling
+  - Connection pooling
+  - Automatic reconnection
+  - Timeout handling
+- **Error Handling**:
+  - Comprehensive SSL error handling
+  - Connection error recovery
+  - Certificate validation
+  - Transport-specific error types
+
+### 4. Message Store with Transaction Support
 The message store provides atomic operations through transactions:
 - Atomic message storage with rollback capability
 - Persistent storage with automatic recovery
@@ -65,7 +82,7 @@ The message store provides atomic operations through transactions:
 - Message versioning for optimistic concurrency control
 - Atomic file operations for reliable persistence
 
-### 4. Advanced Message Pooling System
+### 5. Advanced Message Pooling System
 The enhanced message pooling system provides:
 - Adaptive pool sizing based on message type frequency
 - Automatic cleanup of underutilized pools
@@ -75,19 +92,25 @@ The enhanced message pooling system provides:
 
 Example usage:
 ```rust
-// Begin a transaction
-store.begin_transaction(session_id).await?;
+// Configure SSL transport
+let config = TransportConfig {
+    use_ssl: true,
+    cert_file: Some(PathBuf::from("certs/client.crt")),
+    key_file: Some(PathBuf::from("certs/client.key")),
+    ca_file: Some(PathBuf::from("certs/ca.crt")),
+    verify_peer: true,
+    ..Default::default()
+};
 
-// Store messages atomically
-store.store_message(session_id, 1, message1).await?;
-store.store_message(session_id, 2, message2).await?;
+// Create and connect transport
+let mut transport = Transport::new_with_config(config);
+transport.connect("localhost:8443").await?;
 
-// Commit or rollback
-store.commit_transaction(session_id).await?;
-// Or: store.rollback_transaction(session_id).await?;
-
-// Retrieve message with version information
-let (message, version) = store.get_message_with_version(session_id, 1).await?.unwrap();
+// Send and receive messages
+transport.send(&message).await?;
+if let Some(response) = transport.receive().await? {
+    // Handle response
+}
 ```
 
 ## Technical Implementation Details
@@ -114,41 +137,21 @@ Key features:
 - Memory usage optimization
 - Pool utilization tracking
 
-### 3. Enhanced Message Parser
-- Optimized boundary detection
-- Efficient checksum validation
-- Specialized handling for market data
-- Quote message optimization
-- Performance-focused implementation
+### 3. Enhanced Transport Implementation
+```rust
+pub struct Transport {
+    connection: Option<ConnectionType>,
+    config: TransportConfig,
+    buffer: Vec<u8>,
+}
+```
 
-## Message Roundtrip Flow
-1. **Message Creation**:
-   ```rust
-   let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-   msg.set_field(Field::new(field::CL_ORD_ID, "12345"))?;
-   msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
-   ```
-
-2. **Validation & Formatting**:
-   ```rust
-   MessageValidator::validate(&msg)?;
-   msg.set_formatter(field::PRICE, DecimalFormatter::new(2));
-   ```
-
-3. **Persistence**:
-   ```rust
-   store.begin_transaction(session_id).await?;
-   store.store_message(session_id, seq_num, msg.clone()).await?;
-   store.commit_transaction(session_id).await?;
-   ```
-
-4. **Transport**:
-   ```rust
-   transport.send(&msg).await?;
-   if let Some(response) = transport.receive().await? {
-       // Handle response
-   }
-   ```
+Features:
+- SSL/TLS support with certificate management
+- Efficient buffer handling
+- Connection type abstraction
+- Automatic reconnection
+- Comprehensive error handling
 
 ## Current Features
 ✅ Implemented:
@@ -161,7 +164,9 @@ Key features:
 - Advanced message pooling system
 - Market data optimization
 - Quote handling improvements
-- Basic FIX message types support
+- SSL/TLS support
+- Advanced transport layer
+- Comprehensive error handling
 
 🔄 In Progress:
 - Advanced message type support

@@ -1,6 +1,9 @@
 use std::fmt;
 use std::error::Error;
 use serde_json;
+use rustls;
+use rustls::pki_types::InvalidDnsNameError;
+use std::io;
 
 #[derive(Debug)]
 pub enum FixError {
@@ -9,8 +12,11 @@ pub enum FixError {
     ConfigError(String),
     TransportError(String),
     StoreError(String),
-    IoError(std::io::Error),
-    SerializationError(serde_json::Error),  // Add serialization error variant
+    IoError(io::Error),
+    SerializationError(serde_json::Error),
+    SslError(String),
+    ConnectionError(String),
+    CertificateError(String),
 }
 
 impl fmt::Display for FixError {
@@ -23,21 +29,60 @@ impl fmt::Display for FixError {
             FixError::StoreError(msg) => write!(f, "Store error: {}", msg),
             FixError::IoError(err) => write!(f, "IO error: {}", err),
             FixError::SerializationError(err) => write!(f, "Serialization error: {}", err),
+            FixError::SslError(msg) => write!(f, "SSL error: {}", msg),
+            FixError::ConnectionError(msg) => write!(f, "Connection error: {}", msg),
+            FixError::CertificateError(msg) => write!(f, "Certificate error: {}", msg),
         }
     }
 }
 
 impl Error for FixError {}
 
-impl From<std::io::Error> for FixError {
-    fn from(err: std::io::Error) -> FixError {
+impl From<io::Error> for FixError {
+    fn from(err: io::Error) -> FixError {
         FixError::IoError(err)
     }
 }
 
-// Add conversion from serde_json::Error
 impl From<serde_json::Error> for FixError {
     fn from(err: serde_json::Error) -> FixError {
         FixError::SerializationError(err)
+    }
+}
+
+impl From<rustls::Error> for FixError {
+    fn from(err: rustls::Error) -> FixError {
+        FixError::SslError(err.to_string())
+    }
+}
+
+impl From<InvalidDnsNameError> for FixError {
+    fn from(err: InvalidDnsNameError) -> FixError {
+        FixError::CertificateError(format!("Invalid DNS name in certificate: {}", err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let err = FixError::TransportError("Connection failed".to_string());
+        assert_eq!(err.to_string(), "Transport error: Connection failed");
+
+        let err = FixError::SslError("Invalid certificate".to_string());
+        assert_eq!(err.to_string(), "SSL error: Invalid certificate");
+    }
+
+    #[test]
+    fn test_error_conversion() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let fix_err: FixError = io_err.into();
+        assert!(matches!(fix_err, FixError::IoError(_)));
+
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let fix_err: FixError = json_err.into();
+        assert!(matches!(fix_err, FixError::SerializationError(_)));
     }
 }
