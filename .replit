@@ -27,8 +27,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo run"
-waitForPort = 8000
+args = "cargo build"
 
 [deployment]
-run = ["sh", "-c", "cargo run"]
+run = ["sh", "-c", "cargo build"]
