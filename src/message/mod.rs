@@ -2,16 +2,18 @@ pub mod field;
 pub mod parser;
 pub mod validator;
 pub mod formatter;
+pub mod pool;
 
 use chrono;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::fmt;
-pub use field::Field;  // Re-export Field for use in other modules
+pub use field::Field;
 use crate::Result;
 use crate::message::parser::MessageParser;
 use crate::error::FixError;
 use crate::message::formatter::FieldFormatter;
+pub use pool::MessagePool;  // Export MessagePool
 
 #[derive(Clone)]
 pub struct Message {

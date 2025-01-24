@@ -5,7 +5,7 @@ use tokio::time::{self, Duration};
 
 use crate::config::SessionConfig;
 use crate::logging::Logger;
-use crate::message::{Message, Field, field};
+use crate::message::{Message, Field, field, MessagePool};
 use crate::transport::Transport;
 use crate::Result;
 use crate::store::MessageStore;
@@ -19,10 +19,16 @@ pub struct Session {
     transport: Arc<Mutex<Option<Transport>>>,
     logger: Arc<Logger>,
     store: Arc<MessageStore>,
+    message_pool: Arc<MessagePool>,  // Add MessagePool
 }
 
 impl Session {
-    pub fn new(config: SessionConfig, logger: Arc<Logger>, store: Arc<MessageStore>) -> Self {
+    pub fn new(
+        config: SessionConfig,
+        logger: Arc<Logger>,
+        store: Arc<MessageStore>,
+        message_pool: Arc<MessagePool>,  // Add message_pool parameter
+    ) -> Self {
         let state = state::SessionState::with_config(
             10,  // logon timeout
             config.heart_bt_int as u64,
@@ -35,6 +41,7 @@ impl Session {
             transport: Arc::new(Mutex::new(None)),
             logger,
             store,
+            message_pool,  // Store message_pool
         }
     }
 
@@ -69,7 +76,7 @@ impl Session {
         state.set_status(state::Status::InitiateLogon);
         state.update_send_time();
 
-        let logon = self.create_logon_message();
+        let logon = self.create_logon_message().await;
         drop(state);
 
         if let Some(transport) = self.transport.lock().await.as_mut() {
@@ -84,6 +91,7 @@ impl Session {
         let state_clone = Arc::clone(&self.state);
         let config_clone = self.config.clone();
         let logger_clone = Arc::clone(&self.logger);
+        let message_pool_clone = Arc::clone(&self.message_pool);
 
         tokio::spawn(async move {
             let heartbeat_interval = Duration::from_secs(config_clone.heart_bt_int as u64);
@@ -93,7 +101,6 @@ impl Session {
                 interval.tick().await;
                 let mut state = state_clone.lock().await;
 
-                // Check for disconnection conditions
                 if state.should_disconnect() {
                     state.set_status(state::Status::Disconnecting);
                     drop(state);
@@ -105,38 +112,41 @@ impl Session {
                     state.increment_test_request_counter();
                     drop(state);
 
+                    // Get test request message from pool
+                    let mut test_request = message_pool_clone.get_message(field::values::TEST_REQUEST).await;
+                    if let Err(e) = test_request.set_field(Field::new(field::TEST_REQ_ID,
+                        format!("TEST_REQ_{}", chrono::Utc::now().timestamp()))) {
+                            logger_clone.log_event("ERROR", &format!("Failed to set TEST_REQ_ID: {}", e)).ok();
+                            break;
+                    }
+
                     // Send test request
                     if let Some(transport) = transport_clone.lock().await.as_mut() {
-                        let mut test_request = Message::new(field::values::TEST_REQUEST);
-                        match test_request.set_field(Field::new(field::TEST_REQ_ID,
-                            format!("TEST_REQ_{}", chrono::Utc::now().timestamp()))) {
-                                Ok(_) => {
-                                    if let Err(e) = transport.send(&test_request).await {
-                                        logger_clone.log_event("ERROR", &format!("Failed to send test request: {}", e)).ok();
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    logger_clone.log_event("ERROR", &format!("Failed to create test request: {}", e)).ok();
-                                    break;
-                                }
+                        if let Err(e) = transport.send(&test_request).await {
+                            logger_clone.log_event("ERROR", &format!("Failed to send test request: {}", e)).ok();
+                            break;
                         }
                     }
-                } else {
-                    drop(state);
+
+                    // Return message to pool
+                    message_pool_clone.return_message(test_request).await;
                 }
 
                 // Send regular heartbeat if connected
                 let state = state_clone.lock().await;
                 if *state.status() == state::Status::Connected {
                     drop(state);
+
+                    // Get heartbeat message from pool
+                    let heartbeat = message_pool_clone.get_message(field::values::HEARTBEAT).await;
                     if let Some(transport) = transport_clone.lock().await.as_mut() {
-                        let heartbeat = Message::new(field::values::HEARTBEAT);
                         if let Err(e) = transport.send(&heartbeat).await {
                             logger_clone.log_event("ERROR", &format!("Failed to send heartbeat: {}", e)).ok();
                             break;
                         }
                     }
+                    // Return message to pool
+                    message_pool_clone.return_message(heartbeat).await;
                 }
             }
         });
@@ -148,6 +158,7 @@ impl Session {
         let logger_clone = Arc::clone(&self.logger);
         let store_clone = Arc::clone(&self.store);
         let config_clone = self.config.clone();
+        let message_pool_clone = Arc::clone(&self.message_pool);
 
         tokio::spawn(async move {
             loop {
@@ -169,7 +180,8 @@ impl Session {
 
                                     // Check for sequence gaps
                                     if seq_num > state.next_incoming_seq() {
-                                        let mut resend_request = Message::new(field::values::RESEND_REQUEST);
+                                        // Get resend request from pool
+                                        let mut resend_request = message_pool_clone.get_message(field::values::RESEND_REQUEST).await;
                                         match resend_request.set_field(Field::new(field::BEGIN_SEQ_NO, 
                                             state.next_incoming_seq().to_string())) {
                                                 Ok(_) => {
@@ -188,6 +200,7 @@ impl Session {
                                                     logger_clone.log_event("ERROR", &format!("Failed to set BEGIN_SEQ_NO: {}", e)).ok();
                                                 }
                                         }
+                                        message_pool_clone.return_message(resend_request).await;
                                         continue;
                                     }
 
@@ -210,7 +223,7 @@ impl Session {
                                     }
                                 },
                                 field::values::TEST_REQUEST => {
-                                    let mut heartbeat = Message::new(field::values::HEARTBEAT);
+                                    let mut heartbeat = message_pool_clone.get_message(field::values::HEARTBEAT).await;
                                     if let Some(test_req_id) = msg.get_field(field::TEST_REQ_ID) {
                                         if let Err(e) = heartbeat.set_field(Field::new(field::TEST_REQ_ID, test_req_id.value())) {
                                             logger_clone.log_event("ERROR", &format!("Failed to set TEST_REQ_ID in heartbeat: {}", e)).ok();
@@ -218,6 +231,7 @@ impl Session {
                                             logger_clone.log_event("ERROR", &format!("Failed to send heartbeat: {}", e)).ok();
                                         }
                                     }
+                                    message_pool_clone.return_message(heartbeat).await;
                                 },
                                 field::values::HEARTBEAT => {
                                     let mut state = state_clone.lock().await;
@@ -254,7 +268,7 @@ impl Session {
 
         // Send logout message if connected
         if let Some(mut transport) = self.transport.lock().await.take() {
-            let logout = self.create_logout_message();
+            let logout = self.create_logout_message().await;
             transport.send(&logout).await?;
         }
 
@@ -262,9 +276,8 @@ impl Session {
         Ok(())
     }
 
-    fn create_logon_message(&self) -> Message {
-        let mut msg = Message::new(field::values::LOGON);
-        // Using let _ to explicitly indicate we're handling the Result
+    async fn create_logon_message(&self) -> Message {
+        let mut msg = self.message_pool.get_message(field::values::LOGON).await;
         let _ = msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
         let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
         let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
@@ -274,8 +287,8 @@ impl Session {
         msg
     }
 
-    fn create_logout_message(&self) -> Message {
-        let mut msg = Message::new(field::values::LOGOUT);
+    async fn create_logout_message(&self) -> Message {
+        let mut msg = self.message_pool.get_message(field::values::LOGOUT).await;
         let _ = msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
         let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
         let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
@@ -310,15 +323,16 @@ mod tests {
         };
 
         let logger = Arc::new(Logger::new(&log_config));
-        let store = Arc::new(MessageStore::new()); 
-        let session = Session::new(config, logger, store); 
+        let store = Arc::new(MessageStore::new());
+        let message_pool = Arc::new(MessagePool::new());
+        let session = Session::new(config, logger, store, message_pool);
 
         // Test message creation
-        let logon = session.create_logon_message();
+        let logon = session.create_logon_message().await;
         assert_eq!(logon.msg_type(), field::values::LOGON);
         assert!(logon.get_field(field::HEART_BT_INT).is_some());
 
-        let logout = session.create_logout_message();
+        let logout = session.create_logout_message().await;
         assert_eq!(logout.msg_type(), field::values::LOGOUT);
     }
 }

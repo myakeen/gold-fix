@@ -20,17 +20,20 @@ pub struct FixEngine {
     sessions: Arc<Mutex<Vec<session::Session>>>,
     logger: Arc<logging::Logger>,
     store: Arc<store::MessageStore>,
+    message_pool: Arc<message::MessagePool>,  // Add message pool
 }
 
 impl FixEngine {
     pub fn new(config: config::EngineConfig) -> Self {
         let logger = Arc::new(logging::Logger::new(&config.log_config));
         let store = Arc::new(store::MessageStore::new());
+        let message_pool = Arc::new(message::MessagePool::new());  // Initialize message pool
 
         FixEngine {
             sessions: Arc::new(Mutex::new(Vec::new())),
             logger,
             store,
+            message_pool,
         }
     }
 
@@ -55,9 +58,15 @@ impl FixEngine {
         let session = session::Session::new(
             session_config, 
             Arc::clone(&self.logger),
-            Arc::clone(&self.store)
+            Arc::clone(&self.store),
+            Arc::clone(&self.message_pool),  // Pass message pool to session
         );
         sessions.push(session);
         Ok(())
+    }
+
+    /// Get a reference to the message pool
+    pub fn message_pool(&self) -> Arc<message::MessagePool> {
+        Arc::clone(&self.message_pool)
     }
 }

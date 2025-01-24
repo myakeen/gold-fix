@@ -52,7 +52,6 @@ impl MessageValidator {
     }
 
     fn validate_field_values(message: &Message) -> Result<()> {
-        // Validate field data types and ranges
         for (&tag, field) in message.fields() {
             match tag {
                 field::MSG_SEQ_NUM => {
@@ -62,17 +61,38 @@ impl MessageValidator {
                         ));
                     }
                 },
-                field::PRICE | field::QUANTITY => {
+                field::PRICE | field::QUANTITY | field::STOP_PX | field::MIN_QTY | field::MAX_FLOOR => {
                     if let Err(_) = field.value().parse::<f64>() {
                         return Err(FixError::ParseError(
                             format!("Invalid numeric value for tag {}: {}", tag, field.value())
                         ));
                     }
                 },
-                field::SENDING_TIME => {
+                field::SENDING_TIME | field::TRANSACTION_TIME | field::EXPIRE_TIME => {
                     if !Self::is_valid_timestamp(field.value()) {
                         return Err(FixError::ParseError(
                             format!("Invalid timestamp format: {}", field.value())
+                        ));
+                    }
+                },
+                field::SIDE => {
+                    if !Self::is_valid_side(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid side value: {}", field.value())
+                        ));
+                    }
+                },
+                field::ORD_TYPE => {
+                    if !Self::is_valid_order_type(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid order type: {}", field.value())
+                        ));
+                    }
+                },
+                field::TIME_IN_FORCE => {
+                    if !Self::is_valid_time_in_force(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid time in force: {}", field.value())
                         ));
                     }
                 },
@@ -85,49 +105,165 @@ impl MessageValidator {
     fn validate_conditional_fields(message: &Message) -> Result<()> {
         match message.msg_type() {
             field::values::EXECUTION_REPORT => {
-                // Validate ExecType and OrdStatus combination
-                if let (Some(exec_type), Some(ord_status)) = (
-                    message.get_field(field::EXEC_TYPE),
-                    message.get_field(field::ORD_STATUS)
-                ) {
-                    if !Self::is_valid_exec_type_ord_status(exec_type.value(), ord_status.value()) {
-                        return Err(FixError::ParseError(
-                            format!("Invalid ExecType({}) and OrdStatus({}) combination",
-                                exec_type.value(), ord_status.value())
-                        ));
-                    }
-                }
+                Self::validate_execution_report(message)?;
             },
             field::values::NEW_ORDER_SINGLE => {
-                // If OrderType is LIMIT, Price is required
-                if let Some(ord_type) = message.get_field(field::ORD_TYPE) {
-                    if ord_type.value() == field::values::LIMIT && message.get_field(field::PRICE).is_none() {
-                        return Err(FixError::ParseError(
-                            "Price is required for LIMIT orders".into()
-                        ));
-                    }
-                }
+                Self::validate_new_order_single(message)?;
             },
-            field::values::RESEND_REQUEST => {
-                // Validate BeginSeqNo and EndSeqNo
-                if let (Some(begin_seq), Some(end_seq)) = (
-                    message.get_field(field::BEGIN_SEQ_NO),
-                    message.get_field(field::END_SEQ_NO)
-                ) {
-                    let begin = begin_seq.value().parse::<i32>().map_err(|_| 
-                        FixError::ParseError("Invalid BeginSeqNo".into()))?;
-                    let end = end_seq.value().parse::<i32>().map_err(|_| 
-                        FixError::ParseError("Invalid EndSeqNo".into()))?;
-                    if begin <= 0 || (end != 0 && end < begin) {
-                        return Err(FixError::ParseError(
-                            "Invalid sequence range in ResendRequest".into()
-                        ));
-                    }
-                }
+            field::values::ORDER_CANCEL_REPLACE_REQUEST => {
+                Self::validate_order_cancel_replace(message)?;
+            },
+            field::values::QUOTE_REQUEST => {
+                Self::validate_quote_request(message)?;
+            },
+            field::values::MARKET_DATA_REQUEST => {
+                Self::validate_market_data_request(message)?;
             },
             _ => {}
         }
         Ok(())
+    }
+
+    fn validate_execution_report(message: &Message) -> Result<()> {
+        if let (Some(exec_type), Some(ord_status)) = (
+            message.get_field(field::EXEC_TYPE),
+            message.get_field(field::ORD_STATUS)
+        ) {
+            if !Self::is_valid_exec_type_ord_status(exec_type.value(), ord_status.value()) {
+                return Err(FixError::ParseError(
+                    format!("Invalid ExecType({}) and OrdStatus({}) combination",
+                        exec_type.value(), ord_status.value())
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_new_order_single(message: &Message) -> Result<()> {
+        // Validate price for LIMIT orders
+        if let Some(ord_type) = message.get_field(field::ORD_TYPE) {
+            match ord_type.value() {
+                field::values::LIMIT => {
+                    if message.get_field(field::PRICE).is_none() {
+                        return Err(FixError::ParseError("Price is required for LIMIT orders".into()));
+                    }
+                },
+                field::values::STOP => {
+                    if message.get_field(field::STOP_PX).is_none() {
+                        return Err(FixError::ParseError("StopPx is required for STOP orders".into()));
+                    }
+                },
+                field::values::STOP_LIMIT => {
+                    if message.get_field(field::PRICE).is_none() || message.get_field(field::STOP_PX).is_none() {
+                        return Err(FixError::ParseError(
+                            "Both Price and StopPx are required for STOP LIMIT orders".into()
+                        ));
+                    }
+                },
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_order_cancel_replace(message: &Message) -> Result<()> {
+        // Original order ID is required
+        if message.get_field(field::ORDER_ID).is_none() {
+            return Err(FixError::ParseError("OrderID is required for cancel/replace".into()));
+        }
+        Ok(())
+    }
+
+    fn validate_quote_request(message: &Message) -> Result<()> {
+        // Symbol is required for quote requests
+        if message.get_field(field::SYMBOL).is_none() {
+            return Err(FixError::ParseError("Symbol is required for quote requests".into()));
+        }
+        Ok(())
+    }
+
+    fn validate_market_data_request(message: &Message) -> Result<()> {
+        // Symbol and subscription type are required
+        if message.get_field(field::SYMBOL).is_none() {
+            return Err(FixError::ParseError("Symbol is required for market data requests".into()));
+        }
+        Ok(())
+    }
+
+    fn get_required_fields(msg_type: &str) -> HashSet<i32> {
+        let mut fields = HashSet::new();
+        match msg_type {
+            field::values::LOGON => {
+                fields.insert(field::ENCRYPT_METHOD);
+                fields.insert(field::HEART_BT_INT);
+            }
+            field::values::NEW_ORDER_SINGLE => {
+                fields.insert(field::CL_ORD_ID);
+                fields.insert(field::SYMBOL);
+                fields.insert(field::SIDE);
+                fields.insert(field::ORD_TYPE);
+                fields.insert(field::QUANTITY);
+                fields.insert(field::TIME_IN_FORCE);
+            }
+            field::values::ORDER_CANCEL_REPLACE_REQUEST => {
+                fields.insert(field::ORDER_ID);
+                fields.insert(field::CL_ORD_ID);
+                fields.insert(field::SYMBOL);
+                fields.insert(field::SIDE);
+                fields.insert(field::QUANTITY);
+            }
+            field::values::QUOTE_REQUEST => {
+                fields.insert(field::SYMBOL);
+            }
+            field::values::MARKET_DATA_REQUEST => {
+                fields.insert(field::SYMBOL);
+            }
+            _ => {}
+        }
+        fields
+    }
+
+    fn is_valid_timestamp(timestamp: &str) -> bool {
+        let re = regex::Regex::new(r"^\d{8}-\d{2}:\d{2}:\d{2}(\.\d{3})?$").unwrap();
+        re.is_match(timestamp)
+    }
+
+    fn is_valid_side(side: &str) -> bool {
+        matches!(side, 
+            field::values::BUY | field::values::SELL | 
+            field::values::BUY_MINUS | field::values::SELL_PLUS |
+            field::values::SELL_SHORT | field::values::SELL_SHORT_EXEMPT
+        )
+    }
+
+    fn is_valid_order_type(ord_type: &str) -> bool {
+        matches!(ord_type,
+            field::values::MARKET | field::values::LIMIT |
+            field::values::STOP | field::values::STOP_LIMIT |
+            field::values::MARKET_ON_CLOSE | field::values::WITH_OR_WITHOUT |
+            field::values::LIMIT_OR_BETTER | field::values::LIMIT_WITH_OR_WITHOUT
+        )
+    }
+
+    fn is_valid_time_in_force(tif: &str) -> bool {
+        matches!(tif,
+            field::values::DAY | field::values::GOOD_TILL_CANCEL |
+            field::values::AT_THE_OPENING | field::values::IMMEDIATE_OR_CANCEL |
+            field::values::FILL_OR_KILL | field::values::GOOD_TILL_DATE
+        )
+    }
+
+    fn is_valid_exec_type_ord_status(exec_type: &str, ord_status: &str) -> bool {
+        let valid_combinations: HashMap<&str, HashSet<&str>> = [
+            ("0", vec!["0", "1"].into_iter().collect()),
+            ("1", vec!["1", "2"].into_iter().collect()),
+            ("2", vec!["2"].into_iter().collect()),
+            ("4", vec!["4"].into_iter().collect()),
+            ("C", vec!["C"].into_iter().collect()),
+        ].iter().cloned().collect();
+
+        valid_combinations.get(exec_type)
+            .map_or(false, |valid_statuses| valid_statuses.contains(ord_status))
     }
 
     fn validate_sending_time(message: &Message) -> Result<()> {
@@ -151,59 +287,6 @@ impl MessageValidator {
         }
         Ok(())
     }
-
-    fn get_required_fields(msg_type: &str) -> HashSet<i32> {
-        let mut fields = HashSet::new();
-        match msg_type {
-            field::values::LOGON => {
-                fields.insert(field::ENCRYPT_METHOD);
-                fields.insert(field::HEART_BT_INT);
-            }
-            field::values::NEW_ORDER_SINGLE => {
-                fields.insert(field::CL_ORD_ID);
-                fields.insert(field::SYMBOL);
-                fields.insert(field::SIDE);
-                fields.insert(field::ORD_TYPE);
-                fields.insert(field::QUANTITY);
-                fields.insert(field::TIME_IN_FORCE);
-            }
-            field::values::EXECUTION_REPORT => {
-                fields.insert(field::ORDER_ID);
-                fields.insert(field::EXEC_ID);
-                fields.insert(field::EXEC_TYPE);
-                fields.insert(field::ORD_STATUS);
-                fields.insert(field::SYMBOL);
-                fields.insert(field::SIDE);
-                fields.insert(field::QUANTITY);
-            }
-            field::values::RESEND_REQUEST => {
-                fields.insert(field::BEGIN_SEQ_NO);
-                fields.insert(field::END_SEQ_NO);
-            }
-            _ => {}
-        }
-        fields
-    }
-
-    fn is_valid_timestamp(timestamp: &str) -> bool {
-        // Format: YYYYMMDD-HH:MM:SS or YYYYMMDD-HH:MM:SS.sss
-        let re = regex::Regex::new(r"^\d{8}-\d{2}:\d{2}:\d{2}(\.\d{3})?$").unwrap();
-        re.is_match(timestamp)
-    }
-
-    fn is_valid_exec_type_ord_status(exec_type: &str, ord_status: &str) -> bool {
-        // Define valid combinations of ExecType and OrdStatus
-        let valid_combinations: HashMap<&str, HashSet<&str>> = [
-            ("0", vec!["0", "1"].into_iter().collect()), // New -> New, Partial Fill
-            ("1", vec!["1", "2"].into_iter().collect()), // Partial Fill -> Partial Fill, Filled
-            ("2", vec!["2"].into_iter().collect()),      // Fill -> Filled
-            ("4", vec!["4"].into_iter().collect()),      // Canceled -> Canceled
-            ("C", vec!["C"].into_iter().collect()),      // Expired -> Expired
-        ].iter().cloned().collect();
-
-        valid_combinations.get(exec_type)
-            .map_or(false, |valid_statuses| valid_statuses.contains(ord_status))
-    }
 }
 
 #[cfg(test)]
@@ -211,6 +294,33 @@ mod tests {
     use super::*;
     use crate::message::Field;
     use crate::message::field::values;
+
+    #[test]
+    fn test_validate_new_order_types() {
+        let mut msg = Message::new(values::NEW_ORDER_SINGLE);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::NEW_ORDER_SINGLE)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+        msg.set_field(Field::new(field::CL_ORD_ID, "123456")).unwrap();
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::SIDE, values::BUY)).unwrap();
+        msg.set_field(Field::new(field::QUANTITY, "100")).unwrap();
+        msg.set_field(Field::new(field::TIME_IN_FORCE, values::DAY)).unwrap();
+
+        // Test LIMIT order
+        msg.set_field(Field::new(field::ORD_TYPE, values::LIMIT)).unwrap();
+        msg.set_field(Field::new(field::PRICE, "150.50")).unwrap();
+        assert!(MessageValidator::validate(&msg).is_ok());
+
+        // Test STOP order
+        msg.set_field(Field::new(field::ORD_TYPE, values::STOP)).unwrap();
+        msg.set_field(Field::new(field::STOP_PX, "155.00")).unwrap();
+        assert!(MessageValidator::validate(&msg).is_ok());
+    }
 
 
     #[test]
@@ -278,6 +388,21 @@ mod tests {
         // Add ResendRequest fields
         let _ = msg.set_field(Field::new(field::BEGIN_SEQ_NO, "1"));
         let _ = msg.set_field(Field::new(field::END_SEQ_NO, "10"));
+
+        assert!(MessageValidator::validate(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_quote_request() {
+        let mut msg = Message::new(values::QUOTE_REQUEST);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::QUOTE_REQUEST)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }

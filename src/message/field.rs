@@ -46,6 +46,19 @@ pub const TIME_IN_FORCE: i32 = 59;
 pub const QUANTITY: i32 = 38;
 pub const PRICE: i32 = 44;
 
+// Additional Order Fields
+pub const TEXT: i32 = 58;
+pub const TRANSACTION_TIME: i32 = 60;
+pub const SETTLE_TYPE: i32 = 63;
+pub const SETTLE_DATE: i32 = 64;
+pub const TRADE_DATE: i32 = 75;
+pub const POSITION_EFFECT: i32 = 77;
+pub const STOP_PX: i32 = 99;
+pub const EX_DESTINATION: i32 = 100;
+pub const MIN_QTY: i32 = 110;
+pub const MAX_FLOOR: i32 = 111;
+pub const EXPIRE_TIME: i32 = 126;
+
 // Session management fields
 pub const ENCRYPT_METHOD: i32 = 98;
 pub const RESET_SEQ_NUM_FLAG: i32 = 141;
@@ -74,13 +87,47 @@ pub mod values {
     pub const ORDER_CANCEL_REQUEST: &str = "F";
     pub const EXECUTION_REPORT: &str = "8";
 
+    // Additional Message Types
+    pub const ORDER_CANCEL_REPLACE_REQUEST: &str = "G";
+    pub const ORDER_STATUS_REQUEST: &str = "H";
+    pub const ORDER_MASS_CANCEL_REQUEST: &str = "q";
+    pub const QUOTE_REQUEST: &str = "R";
+    pub const QUOTE: &str = "S";
+    pub const MARKET_DATA_REQUEST: &str = "V";
+    pub const MARKET_DATA_SNAPSHOT: &str = "W";
+    pub const SECURITY_DEFINITION_REQUEST: &str = "c";
+    pub const SECURITY_DEFINITION: &str = "d";
+    pub const TRADE_CAPTURE_REPORT: &str = "AE";
+
     // Side values
     pub const BUY: &str = "1";
     pub const SELL: &str = "2";
+    pub const BUY_MINUS: &str = "3";
+    pub const SELL_PLUS: &str = "4";
+    pub const SELL_SHORT: &str = "5";
+    pub const SELL_SHORT_EXEMPT: &str = "6";
 
     // Order types
     pub const MARKET: &str = "1";
     pub const LIMIT: &str = "2";
     pub const STOP: &str = "3";
     pub const STOP_LIMIT: &str = "4";
+    pub const MARKET_ON_CLOSE: &str = "5";
+    pub const WITH_OR_WITHOUT: &str = "6";
+    pub const LIMIT_OR_BETTER: &str = "7";
+    pub const LIMIT_WITH_OR_WITHOUT: &str = "8";
+
+    // Time in force
+    pub const DAY: &str = "0";
+    pub const GOOD_TILL_CANCEL: &str = "1";
+    pub const AT_THE_OPENING: &str = "2";
+    pub const IMMEDIATE_OR_CANCEL: &str = "3";
+    pub const FILL_OR_KILL: &str = "4";
+    pub const GOOD_TILL_DATE: &str = "6";
+
+    // Position effect
+    pub const OPEN: &str = "O";
+    pub const CLOSE: &str = "C";
+    pub const ROLLED: &str = "R";
+    pub const FIFO: &str = "F";
 }
