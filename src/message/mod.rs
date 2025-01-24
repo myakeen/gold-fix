@@ -6,6 +6,8 @@ use chrono;
 use std::collections::HashMap;
 pub use field::Field;  // Re-export Field for use in other modules
 use crate::Result;
+use crate::message::parser::MessageParser;
+use crate::error::FixError;
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -23,14 +25,23 @@ impl Message {
         msg
     }
 
+    pub fn from_string(msg_str: &str) -> Result<Self> {
+        MessageParser::parse(msg_str)
+    }
+
     fn set_default_headers(&mut self) {
         // Set BeginString
         self.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
         // Set MsgType
         self.set_field(Field::new(field::MSG_TYPE, &self.msg_type));
-        // Set current time as SendingTime
+        // Set SendingTime
         let timestamp = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
         self.set_field(Field::new(field::SENDING_TIME, timestamp));
+        // Set default sender and target comp ids
+        self.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        self.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        // Set initial sequence number
+        self.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
     }
 
     pub fn set_field(&mut self, field: Field) {
@@ -45,7 +56,6 @@ impl Message {
         &self.msg_type
     }
 
-    // New method to expose fields for validation
     pub fn fields(&self) -> &HashMap<i32, Field> {
         &self.fields
     }
@@ -56,6 +66,8 @@ impl Message {
         // Start with BeginString (tag 8)
         if let Some(begin_str) = self.get_field(field::BEGIN_STRING) {
             msg.push_str(&format!("8={}\u{1}", begin_str.value()));
+        } else {
+            return Err(FixError::ParseError("Missing BeginString".into()));
         }
 
         // Add BodyLength placeholder
@@ -64,8 +76,12 @@ impl Message {
         // Add MsgType
         msg.push_str(&format!("35={}\u{1}", self.msg_type));
 
+        // Sort fields by tag number for consistent output
+        let mut sorted_fields: Vec<_> = self.fields.iter().collect();
+        sorted_fields.sort_by_key(|&(k, _)| *k);
+
         // Add all other fields except BeginString, BodyLength, and Checksum
-        for (&tag, field) in self.fields.iter() {
+        for (&tag, field) in sorted_fields.iter() {
             if tag != field::BEGIN_STRING && tag != field::BODY_LENGTH && tag != field::CHECKSUM {
                 msg.push_str(&format!("{}={}\u{1}", tag, field.value()));
             }
@@ -132,5 +148,33 @@ mod tests {
         assert!(fields.contains_key(&field::CL_ORD_ID));
         assert!(fields.contains_key(&field::BEGIN_STRING)); // Default header
         assert!(fields.contains_key(&field::MSG_TYPE)); // Default header
+    }
+
+    #[test]
+    fn test_message_roundtrip() {
+        let mut original = Message::new(values::NEW_ORDER_SINGLE);
+        original.set_field(Field::new(field::CL_ORD_ID, "12345"));
+        original.set_field(Field::new(field::SYMBOL, "AAPL"));
+        original.set_field(Field::new(field::SIDE, values::BUY));
+        original.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        original.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        original.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+
+        let msg_str = original.to_string().unwrap();
+        let parsed = Message::from_string(&msg_str).unwrap();
+
+        assert_eq!(parsed.msg_type(), original.msg_type());
+        assert_eq!(
+            parsed.get_field(field::CL_ORD_ID).unwrap().value(),
+            original.get_field(field::CL_ORD_ID).unwrap().value()
+        );
+        assert_eq!(
+            parsed.get_field(field::SYMBOL).unwrap().value(),
+            original.get_field(field::SYMBOL).unwrap().value()
+        );
+        assert_eq!(
+            parsed.get_field(field::SIDE).unwrap().value(),
+            original.get_field(field::SIDE).unwrap().value()
+        );
     }
 }

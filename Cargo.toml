@@ -9,3 +9,6 @@ serde = { version = "1.0.217", features = ["derive"] }
 toml = { version = "0.8.19", features = ["parse"] }
 chrono = "0.4.39"
 regex = "1.10.3"
+
+[dev-dependencies]
+tempfile = "3.10.0"

@@ -10,6 +10,7 @@ use crate::logging::Logger;
 use crate::message::{Message, Field, field};
 use crate::transport::Transport;
 use crate::Result;
+use crate::error::FixError;
 use crate::store::MessageStore;
 use chrono;
 
@@ -300,7 +301,6 @@ impl Session {
     }
 
 
-
     async fn send_resend_request(&self, expected_seq_num: i32) -> Result<()> {
         let mut resend_request = Message::new(field::values::RESEND_REQUEST);
         resend_request.set_field(Field::new(field::BEGIN_SEQ_NO, expected_seq_num.to_string()));
@@ -315,7 +315,7 @@ impl Session {
 
     async fn resend_messages(&self, begin_seq: i32, end_seq: i32) -> Result<()> {
         let session_id = format!("{}_{}", self.config.sender_comp_id, self.config.target_comp_id);
-        let messages = self.store.get_messages_range(begin_seq, end_seq).await?;
+        let messages = self.store.get_messages_range(&session_id, begin_seq, end_seq).await?;
 
         if let Some(transport) = self.transport.lock().await.as_mut() {
             for msg in messages {

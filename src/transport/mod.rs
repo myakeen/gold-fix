@@ -1,7 +1,6 @@
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::message::{Message, Field};
-use crate::message::field::{self, values};
+use crate::message::Message;
 use crate::message::parser::MessageParser;
 use crate::Result;
 
@@ -53,6 +52,7 @@ mod tests {
     use super::*;
     use tokio::net::TcpListener;
     use std::time::Duration;
+    use crate::message::{Field, field};
 
     #[tokio::test]
     async fn test_transport_send_receive() {
@@ -65,7 +65,7 @@ mod tests {
             let mut transport = Transport::new(stream);
 
             // Create and send a heartbeat message
-            let mut msg = Message::new(values::HEARTBEAT);
+            let mut msg = Message::new(field::values::HEARTBEAT);
             msg.set_field(Field::new(field::SENDER_COMP_ID, "CLIENT"));
             msg.set_field(Field::new(field::TARGET_COMP_ID, "SERVER"));
             msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
@@ -85,10 +85,10 @@ mod tests {
         let received = transport.receive().await.unwrap();
         assert!(received.is_some());
         let msg = received.unwrap();
-        assert_eq!(msg.msg_type(), values::HEARTBEAT);
+        assert_eq!(msg.msg_type(), field::values::HEARTBEAT);
 
         // Send response
-        let mut response = Message::new(values::HEARTBEAT);
+        let mut response = Message::new(field::values::HEARTBEAT);
         response.set_field(Field::new(field::SENDER_COMP_ID, "SERVER"));
         response.set_field(Field::new(field::TARGET_COMP_ID, "CLIENT"));
         response.set_field(Field::new(field::MSG_SEQ_NUM, "1"));

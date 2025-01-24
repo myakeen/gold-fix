@@ -7,8 +7,37 @@ pub struct MessageParser;
 impl MessageParser {
     pub fn parse(data: &str) -> Result<Message> {
         let fields: Vec<&str> = data.split('\u{1}').collect();
-        let mut message = None;
 
+        // First pass: find BeginString and MsgType to create the message
+        let mut begin_string = None;
+        let mut msg_type = None;
+
+        for field_str in fields.iter() {
+            if field_str.is_empty() {
+                continue;
+            }
+
+            let parts: Vec<&str> = field_str.split('=').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            if let Ok(tag) = parts[0].parse::<i32>() {
+                match tag {
+                    8 => begin_string = Some(parts[1].to_string()),  // BeginString
+                    35 => msg_type = Some(parts[1].to_string()),     // MsgType
+                    _ => continue,
+                }
+            }
+        }
+
+        // Create message with the correct type
+        let mut message = match (begin_string, msg_type) {
+            (Some(_), Some(msg_type)) => Message::new(&msg_type),
+            _ => return Err(FixError::ParseError("Missing BeginString or MsgType".into())),
+        };
+
+        // Second pass: set all fields
         for field_str in fields {
             if field_str.is_empty() {
                 continue;
@@ -16,25 +45,15 @@ impl MessageParser {
 
             let parts: Vec<&str> = field_str.split('=').collect();
             if parts.len() != 2 {
-                return Err(FixError::ParseError(
-                    format!("Invalid field format: {}", field_str)
-                ));
+                continue;
             }
 
-            let tag = parts[0].parse::<i32>().map_err(|_| {
-                FixError::ParseError(format!("Invalid tag: {}", parts[0]))
-            })?;
-
-            if tag == 35 {  // MsgType
-                message = Some(Message::new(parts[1]));
-            }
-
-            if let Some(ref mut msg) = message {
-                msg.set_field(Field::new(tag, parts[1].to_string()));
+            if let Ok(tag) = parts[0].parse::<i32>() {
+                message.set_field(Field::new(tag, parts[1].to_string()));
             }
         }
 
-        message.ok_or_else(|| FixError::ParseError("Missing message type".into()))
+        Ok(message)
     }
 
     pub fn extract_complete_message(buffer: &[u8]) -> Option<(String, usize)> {
@@ -78,6 +97,7 @@ impl MessageParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::field;
 
     #[test]
     fn test_parse_logon_message() {
@@ -86,6 +106,19 @@ mod tests {
         assert!(result.is_ok());
         let message = result.unwrap();
         assert_eq!(message.msg_type(), "A");
+        assert_eq!(message.get_field(field::SENDER_COMP_ID).unwrap().value(), "SENDER");
+        assert_eq!(message.get_field(field::TARGET_COMP_ID).unwrap().value(), "TARGET");
+    }
+
+    #[test]
+    fn test_parse_new_order_single() {
+        let msg_str = "8=FIX.4.2\u{1}35=D\u{1}11=12345\u{1}55=AAPL\u{1}54=1\u{1}10=123\u{1}";
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_ok());
+        let message = result.unwrap();
+        assert_eq!(message.msg_type(), "D");
+        assert_eq!(message.get_field(field::CL_ORD_ID).unwrap().value(), "12345");
+        assert_eq!(message.get_field(field::SYMBOL).unwrap().value(), "AAPL");
     }
 
     #[test]
