@@ -19,6 +19,10 @@ args = "FIX Engine"
 task = "workflow.run"
 args = "Build FIX Engine"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Build Examples"
+
 [[workflows.workflow]]
 name = "FIX Engine"
 author = "agent"
@@ -45,7 +49,21 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo build"
+args = "cargo build --examples"
+
+[[workflows.workflow]]
+name = "Build Examples"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo build --examples"
 
 [deployment]
-run = ["sh", "-c", "cargo build"]
+run = ["sh", "-c", "cargo build --examples"]

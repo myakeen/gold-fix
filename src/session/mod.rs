@@ -349,6 +349,43 @@ impl Session {
             }
         }
     }
+
+    pub async fn disconnect(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        state.set_status(state::Status::Disconnecting);
+
+        if let Some(transport) = self.transport.lock().await.as_mut() {
+            let logout = self.create_logout_message().await;
+            let _ = transport.send(&logout).await;  // Best effort send
+        }
+
+        *self.transport.lock().await = None;
+        state.set_status(state::Status::Disconnected);
+        Ok(())
+    }
+
+    pub async fn logout(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        state.set_status(state::Status::Disconnecting);
+
+        // Send logout message
+        if let Some(transport) = self.transport.lock().await.as_mut() {
+            let logout = self.create_logout_message().await;
+            transport.send(&logout).await?;
+        }
+
+        state.set_status(state::Status::Disconnected);
+        Ok(())
+    }
+
+    pub async fn is_connected(&self) -> bool {
+        let state = self.state.lock().await;
+        *state.status() == state::Status::Connected
+    }
+
+    pub async fn get_state(&self) -> Result<state::SessionState> {
+        Ok(self.state.lock().await.clone())
+    }
 }
 
 #[cfg(test)]

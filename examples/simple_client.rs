@@ -1,11 +1,24 @@
 use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
+    transport::TransportConfig,
 };
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create transport configuration with SSL/TLS support
+    let transport_config = TransportConfig {
+        use_ssl: true,
+        cert_file: Some(PathBuf::from("certs/client.crt")),
+        key_file: Some(PathBuf::from("certs/client.key")),
+        ca_file: Some(PathBuf::from("certs/ca.crt")),
+        verify_peer: true,
+        buffer_size: 4096,
+        connection_timeout: Duration::from_secs(30),
+    };
+
     // Create configuration
     let config = EngineConfig {
         log_config: LogConfig {
@@ -24,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_on_logon: true,
                 reset_on_logout: true,
                 reset_on_disconnect: true,
+                transport_config: Some(transport_config),
             }
         ],
     };
@@ -32,8 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = FixEngine::new(config);
     engine.start().await?;
 
-    // Wait for a while
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    // Wait for a while to observe the connection
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Stop the engine
     engine.stop().await?;

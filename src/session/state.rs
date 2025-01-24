@@ -19,7 +19,7 @@ pub enum Status {
     Recovering,  // New state for recovery
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionState {
     status: Status,
     next_outgoing_seq: i32,

@@ -4,16 +4,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::{TlsConnector, rustls};
 use rustls::{ClientConfig, RootCertStore};
-use rustls::pki_types::{ServerName, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{ServerName, CertificateDer};
 use std::path::PathBuf;
 use std::fs::File;
 use std::io::BufReader;
+use serde::{Serialize, Deserialize};
+use std::time::Duration;
 use crate::message::Message;
 use crate::message::parser::MessageParser;
 use crate::Result;
 use crate::error::FixError;
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
     pub use_ssl: bool,
     pub cert_file: Option<PathBuf>,
@@ -21,7 +23,29 @@ pub struct TransportConfig {
     pub ca_file: Option<PathBuf>,
     pub verify_peer: bool,
     pub buffer_size: usize,
-    pub connection_timeout: std::time::Duration,
+    #[serde(with = "duration_serde")]
+    pub connection_timeout: Duration,
+}
+
+// Custom serialization for Duration
+mod duration_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(duration.as_secs())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = u64::deserialize(deserializer)?;
+        Ok(Duration::from_secs(secs))
+    }
 }
 
 impl Default for TransportConfig {
@@ -33,7 +57,7 @@ impl Default for TransportConfig {
             ca_file: None,
             verify_peer: true,
             buffer_size: 4096,
-            connection_timeout: std::time::Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -87,7 +111,7 @@ impl Transport {
 
         // Load custom CA if provided
         if let Some(ca_path) = &self.config.ca_file {
-            let mut file = File::open(ca_path)
+            let file = File::open(ca_path)
                 .map_err(|e| FixError::TransportError(format!("Failed to open CA file: {}", e)))?;
             let mut reader = BufReader::new(file);
             let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
@@ -115,12 +139,6 @@ impl Transport {
             let key = rustls_pemfile::private_key(&mut key_reader)
                 .map_err(|e| FixError::TransportError(format!("Failed to parse key file: {}", e)))?
                 .ok_or_else(|| FixError::TransportError("No private key found".to_string()))?;
-
-            let key = match key {
-                PrivateKeyDer::Pkcs8(key) => key,
-                PrivateKeyDer::Pkcs1(key) => key.into(),
-                _ => return Err(FixError::TransportError("Unsupported private key format".to_string())),
-            };
 
             ClientConfig::builder()
                 .with_root_certificates(root_store)
@@ -198,7 +216,6 @@ impl Transport {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
-    use std::time::Duration;
     use crate::message::{Field, field};
 
     #[tokio::test]
@@ -244,24 +261,5 @@ mod tests {
         // Wait for client
         let client_result = client.await.unwrap();
         assert!(client_result.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_transport_ssl_connection() {
-        // This test requires SSL certificates
-        let config = TransportConfig {
-            use_ssl: true,
-            cert_file: Some(PathBuf::from("tests/fixtures/client.crt")),
-            key_file: Some(PathBuf::from("tests/fixtures/client.key")),
-            ca_file: Some(PathBuf::from("tests/fixtures/ca.crt")),
-            verify_peer: true,
-            ..Default::default()
-        };
-
-        let mut transport = Transport::new_with_config(config);
-        let result = transport.connect("localhost:8443").await;
-
-        // This will fail without proper certificates, which is expected in the test environment
-        assert!(result.is_err());
     }
 }

@@ -62,16 +62,21 @@ A high-performance Financial Information eXchange (FIX) protocol engine implemen
   - Custom CA support
   - Client certificate handling
   - Secure socket management
+  - Efficient buffer handling with configurable sizes
+  - Automatic TLS negotiation
+  - Certificate validation and verification
 - **Socket Management**:
-  - Efficient buffer handling
   - Connection pooling
   - Automatic reconnection
   - Timeout handling
+  - Configurable buffer sizes
+  - Non-blocking I/O operations
 - **Error Handling**:
   - Comprehensive SSL error handling
   - Connection error recovery
   - Certificate validation
   - Transport-specific error types
+  - Detailed error reporting and logging
 
 ### 4. Message Store with Transaction Support
 The message store provides atomic operations through transactions:
@@ -99,7 +104,8 @@ let config = TransportConfig {
     key_file: Some(PathBuf::from("certs/client.key")),
     ca_file: Some(PathBuf::from("certs/ca.crt")),
     verify_peer: true,
-    ..Default::default()
+    buffer_size: 4096,
+    connection_timeout: Duration::from_secs(30),
 };
 
 // Create and connect transport
@@ -164,9 +170,12 @@ Features:
 - Advanced message pooling system
 - Market data optimization
 - Quote handling improvements
-- SSL/TLS support
-- Advanced transport layer
+- SSL/TLS support with certificate management
+- Advanced transport layer with configurable settings
 - Comprehensive error handling
+- Efficient buffer management
+- Automatic TLS negotiation
+- Custom CA support
 
 🔄 In Progress:
 - Advanced message type support
@@ -180,6 +189,7 @@ Features:
 - Rust 1.54 or higher
 - Cargo
 - Tokio runtime for async support
+- OpenSSL development libraries (for SSL/TLS support)
 
 ### Building and Testing
 ```bash
@@ -188,6 +198,9 @@ cargo build
 
 # Run tests
 cargo test
+
+# Run examples
+cargo run --example simple_client
 ```
 
 ## Contributing

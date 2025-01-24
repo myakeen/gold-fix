@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
+use crate::transport::TransportConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
@@ -25,6 +26,7 @@ pub struct SessionConfig {
     pub reset_on_logon: bool,
     pub reset_on_logout: bool,
     pub reset_on_disconnect: bool,
+    pub transport_config: Option<TransportConfig>,
 }
 
 impl EngineConfig {
