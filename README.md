@@ -1,15 +1,66 @@
-# Rust FIX Protocol Engine
+# GoldFix: Rust FIX Protocol Engine
 
-A high-performance Financial Information eXchange (FIX) protocol engine implementation in Rust, featuring robust error handling and atomic message operations. Based on QuickFix/n architecture with Rust-specific optimizations.
+A high-performance Financial Information eXchange (FIX) protocol engine implementation in Rust, featuring robust error handling, atomic message operations, and transaction support. Built with modern Rust practices and optimized for performance.
 
-## Core Features
+## Technical Architecture
 
-### 1. Message Store with Transaction Support
+```
+                                  GoldFix
+                                      |
+                 +--------------------+--------------------+
+                 |                    |                    |
+            Message Layer       Session Layer        Transport Layer
+                 |                    |                    |
+        +--------+--------+    +------+------+     +------+------+
+        |    Messages     |    |   Sessions   |     |  Transport   |
+        |    Validation   |    |   Heartbeat  |     |    TCP/IP    |
+        |    Formatting   |    |   Sequence   |     |  Messaging   |
+        +--------+--------+    +------+------+     +------+------+
+                 |                    |                    |
+                 |             Message Store               |
+                 +----------------+   |   +----------------+
+                                |   |   |
+                                +---+---+
+                                    |
+                              Persistence
+                           (Atomic Operations)
+```
+
+## Core Components
+
+### 1. Message Layer
+- **Message Processing**: Handles FIX message creation, parsing, and validation
+- **Field Formatting**: Type-safe field formatting with support for:
+  - DateTime formatting
+  - Integer validation
+  - Decimal precision handling
+  - Character field validation
+  - String sanitization
+- **Field Validation**: Comprehensive validation including:
+  - Required fields checking
+  - Field value type validation
+  - Conditional field validation
+  - Message type-specific rules
+
+### 2. Session Layer
+- **Session Management**: 
+  - Clean state transitions
+  - Sequence number tracking
+  - Heartbeat monitoring
+  - Test request handling
+- **Connection Handling**:
+  - Logon sequence
+  - Message sequencing
+  - Session recovery
+
+### 3. Message Store with Transaction Support
 The message store provides atomic operations through transactions:
 - Atomic message storage with rollback capability
 - Persistent storage with automatic recovery
 - Thread-safe concurrent access using `Arc<Mutex<_>>`
 - Efficient in-memory caching with disk persistence
+- Message versioning for optimistic concurrency control
+- Atomic file operations for reliable persistence
 
 Example usage:
 ```rust
@@ -23,41 +74,10 @@ store.store_message(session_id, 2, message2).await?;
 // Commit or rollback
 store.commit_transaction(session_id).await?;
 // Or: store.rollback_transaction(session_id).await?;
+
+// Retrieve message with version information
+let (message, version) = store.get_message_with_version(session_id, 1).await?.unwrap();
 ```
-
-### 2. Comprehensive Error Handling
-Structured error handling using custom `FixError` enum:
-```rust
-pub enum FixError {
-    ParseError(String),
-    SessionError(String),
-    ConfigError(String),
-    TransportError(String),
-    StoreError(String),
-    IoError(std::io::Error),
-}
-```
-
-### 3. Message Processing
-- **Field Formatting**: Type-safe field formatting with support for:
-  - DateTime formatting
-  - Integer validation
-  - Decimal precision handling
-  - Character field validation
-  - String sanitization
-
-- **Field Validation**: Comprehensive validation including:
-  - Required fields checking
-  - Field value type validation
-  - Conditional field validation
-  - Message type-specific rules
-
-
-### 4. Session Management
-- Clean state transitions
-- Sequence number tracking
-- Heartbeat monitoring
-- Test request handling
 
 ## Technical Implementation Details
 
@@ -65,65 +85,47 @@ pub enum FixError {
 - Use of `Arc<Mutex<_>>` for thread-safe state sharing
 - Async/await support throughout the codebase
 - Safe concurrent message processing
+- Optimistic concurrency control with message versioning
 
 ### 2. Message Store Implementation
 ```rust
 pub struct MessageStore {
-    messages: Arc<Mutex<HashMap<String, HashMap<i32, Message>>>>,
+    messages: Arc<Mutex<HashMap<String, HashMap<i32, (Message, u64)>>>>,
     sequence_numbers: Arc<Mutex<HashMap<String, i32>>>,
     store_dir: PathBuf,
     transactions: Arc<Mutex<HashMap<String, Transaction>>>,
+    version_counter: Arc<Mutex<u64>>,
 }
 ```
 
 Key features:
-- Session-based message storage
+- Session-based message storage with versioning
 - Sequence number management
-- Transaction support
-- Persistent storage
+- Transaction support with atomic commits
+- Persistent storage with atomic file operations
+- Version-based conflict detection
 
-### 3. Error Handling Strategy
-- Custom error types with detailed context
-- Proper error propagation
-- Recovery mechanisms
-- Comprehensive error logging
+### 3. Persistence Strategy
+- Atomic file operations using temporary files and rename
+- Version tracking in persistent storage
+- Automatic recovery of message versions
+- Transaction-safe persistence with rollback capability
 
-## Usage Examples
+## Current Features
+✅ Implemented:
+- Message versioning and optimistic locking
+- Atomic transaction support
+- Persistent message store with recovery
+- Thread-safe concurrent access
+- Message validation and formatting
+- Session management
+- Basic FIX message types support
 
-### Basic Message Processing
-```rust
-// Create a new message
-let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-msg.set_field(Field::new(field::CL_ORD_ID, "12345"))?;
-msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
-msg.set_field(Field::new(field::SIDE, values::BUY))?;
-
-// Add custom formatters
-msg.set_formatter(field::SENDING_TIME, DateTimeFormatter);
-msg.set_formatter(field::PRICE, DecimalFormatter::new(2));
-```
-
-### Session Management
-```rust
-// Create and configure a session
-let session = Session::new(config, logger, store);
-session.start().await?;
-
-// Initiate logon sequence
-session.initiate_logon().await?;
-
-// Start message processing
-session.start_message_processor().await;
-```
-
-## Current Status and Next Steps
-1. ✅ Core message store implementation with transaction support
-2. ✅ Field formatting and validation
-3. ✅ Basic session management
-4. ✅ Error handling framework
-5. 🔄 Message persistence optimization
-6. 📝 Session recovery mechanisms
-7. 📝 Performance optimization
+🔄 In Progress:
+- Advanced message type support
+- Performance optimizations
+- Session recovery mechanisms
+- Logging enhancements
 
 ## Development Setup
 

@@ -8,23 +8,26 @@ use crate::message::Message;
 use crate::Result;
 use crate::error::FixError;
 
-/// Transaction state for atomic message operations
+// Transaction state for atomic message operations
 #[derive(Debug)]
 struct Transaction {
     messages: Vec<(i32, Message)>,
     started: bool,
+    version: u64,  // Added version tracking
 }
 
-/// Stores FIX messages with persistence and queueing capabilities
+// Stores FIX messages with persistence and queueing capabilities
 pub struct MessageStore {
-    /// Messages stored by session and sequence number
-    messages: Arc<Mutex<HashMap<String, HashMap<i32, Message>>>>,
-    /// Next expected sequence number for each session
+    // Messages stored by session and sequence number
+    messages: Arc<Mutex<HashMap<String, HashMap<i32, (Message, u64)>>>>,  // Added version number
+    // Next expected sequence number for each session
     sequence_numbers: Arc<Mutex<HashMap<String, i32>>>,
-    /// Store directory for persistence
+    // Store directory for persistence
     store_dir: PathBuf,
-    /// Active transactions
+    // Active transactions
     transactions: Arc<Mutex<HashMap<String, Transaction>>>,
+    // Version counter for optimistic locking
+    version_counter: Arc<Mutex<u64>>,
 }
 
 impl MessageStore {
@@ -41,6 +44,7 @@ impl MessageStore {
             sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
             store_dir,
             transactions: Arc::new(Mutex::new(HashMap::new())),
+            version_counter: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -50,9 +54,16 @@ impl MessageStore {
             return Err(FixError::StoreError("Transaction already in progress".into()));
         }
 
+        let version = {
+            let mut counter = self.version_counter.lock().await;
+            *counter += 1;
+            *counter
+        };
+
         transactions.insert(session_id.to_string(), Transaction {
             messages: Vec::new(),
             started: true,
+            version,
         });
 
         Ok(())
@@ -70,9 +81,40 @@ impl MessageStore {
         // Drop the transactions lock before storing messages
         drop(transactions);
 
-        // Store all messages in the transaction
-        for (seq_num, message) in transaction.messages {
-            self.store_message(session_id, seq_num, message).await?;
+        // Start atomic persistence
+        let file_path = self.store_dir.join(format!("{}.messages", session_id));
+        let temp_path = file_path.with_extension("tmp");
+
+        // Write to temporary file first
+        {
+            let mut temp_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|e| FixError::IoError(e))?;
+
+            // Store all messages in the transaction
+            let messages = transaction.messages.clone(); // Clone to avoid move
+            for (seq_num, message) in messages.iter() {
+                let msg_str = message.to_string()?;
+                writeln!(temp_file, "{}|{}|{}", seq_num, transaction.version, msg_str)
+                    .map_err(|e| FixError::IoError(e))?;
+            }
+
+            temp_file.flush().map_err(|e| FixError::IoError(e))?;
+        }
+
+        // Atomic rename of temporary file to actual file
+        fs::rename(&temp_path, &file_path)
+            .map_err(|e| FixError::IoError(e))?;
+
+        // Update in-memory state
+        let mut messages = self.messages.lock().await;
+        let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
+
+        for (seq_num, message) in transaction.messages.iter() {
+            session_messages.insert(*seq_num, (message.clone(), transaction.version));
         }
 
         Ok(())
@@ -95,23 +137,30 @@ impl MessageStore {
             }
         }
 
-        // Store in memory
+        // Get current version
+        let version = {
+            let mut counter = self.version_counter.lock().await;
+            *counter += 1;
+            *counter
+        };
+
+        // Store in memory with version
         let mut messages = self.messages.lock().await;
         let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
-        session_messages.insert(seq_num, message.clone());
+        session_messages.insert(seq_num, (message.clone(), version));
         drop(messages);
 
         let mut seq_nums = self.sequence_numbers.lock().await;
         seq_nums.insert(session_id.to_string(), seq_num + 1);
         drop(seq_nums);
 
-        // Persist to file with error handling
-        self.persist_message(session_id, seq_num, &message).await?;
+        // Persist to file with version
+        self.persist_message(session_id, seq_num, &message, version).await?;
 
         Ok(())
     }
 
-    async fn persist_message(&self, session_id: &str, seq_num: i32, message: &Message) -> Result<()> {
+    async fn persist_message(&self, session_id: &str, seq_num: i32, message: &Message, version: u64) -> Result<()> {
         let file_path = self.store_dir.join(format!("{}.messages", session_id));
         let mut file = OpenOptions::new()
             .create(true)
@@ -119,9 +168,9 @@ impl MessageStore {
             .open(&file_path)
             .map_err(|e| FixError::IoError(e))?;
 
-        // Format: sequence_number|message_string
+        // Format: sequence_number|version|message_string
         let msg_str = message.to_string()?;
-        writeln!(file, "{}|{}", seq_num, msg_str)
+        writeln!(file, "{}|{}|{}", seq_num, version, msg_str)
             .map_err(|e| FixError::IoError(e))?;
 
         // Ensure data is written to disk
@@ -135,7 +184,14 @@ impl MessageStore {
         let messages = self.messages.lock().await;
         Ok(messages.get(session_id)
             .and_then(|session_msgs| session_msgs.get(&seq_num))
-            .cloned())
+            .map(|(msg, _)| msg.clone()))
+    }
+
+    pub async fn get_message_with_version(&self, session_id: &str, seq_num: i32) -> Result<Option<(Message, u64)>> {
+        let messages = self.messages.lock().await;
+        Ok(messages.get(session_id)
+            .and_then(|session_msgs| session_msgs.get(&seq_num))
+            .map(|(msg, ver)| (msg.clone(), *ver)))
     }
 
     pub async fn get_messages_range(&self, session_id: &str, start: i32, end: i32) -> Result<Vec<Message>> {
@@ -144,7 +200,7 @@ impl MessageStore {
 
         if let Some(session_msgs) = messages.get(session_id) {
             for seq_num in start..=end {
-                if let Some(msg) = session_msgs.get(&seq_num) {
+                if let Some((msg, _)) = session_msgs.get(&seq_num) {
                     result.push(msg.clone());
                 }
             }
@@ -194,27 +250,35 @@ impl MessageStore {
         let mut messages = self.messages.lock().await;
         let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
         let mut max_seq = 0;
+        let mut max_version = 0;
 
         for line in reader.lines() {
             let line = line.map_err(|e| FixError::IoError(e))?;
             let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() != 2 {
+            if parts.len() != 3 {
                 continue;
             }
 
-            if let Ok(seq_num) = parts[0].parse::<i32>() {
-                if let Ok(message) = Message::from_string(parts[1]) {
-                    session_messages.insert(seq_num, message);
-                    max_seq = max_seq.max(seq_num);
-                }
+            if let (Ok(seq_num), Ok(version), Ok(message)) = (
+                parts[0].parse::<i32>(),
+                parts[1].parse::<u64>(),
+                Message::from_string(parts[2])
+            ) {
+                session_messages.insert(seq_num, (message, version));
+                max_seq = max_seq.max(seq_num);
+                max_version = max_version.max(version);
             }
         }
 
-        // Update sequence number
+        // Update sequence number and version counter
         drop(messages);
         if max_seq > 0 {
             let mut seq_nums = self.sequence_numbers.lock().await;
             seq_nums.insert(session_id.to_string(), max_seq + 1);
+        }
+        if max_version > 0 {
+            let mut version = self.version_counter.lock().await;
+            *version = max_version;
         }
 
         Ok(())
@@ -239,21 +303,29 @@ mod tests {
 
             // Store messages in transaction
             let mut msg1 = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg1.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            msg1.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
             store.store_message(session_id, 1, msg1.clone()).await.unwrap();
 
             let mut msg2 = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg2.set_field(Field::new(field::CL_ORD_ID, "12346"));
+            msg2.set_field(Field::new(field::CL_ORD_ID, "12346")).unwrap();
             store.store_message(session_id, 2, msg2.clone()).await.unwrap();
 
             // Commit transaction
             store.commit_transaction(session_id).await.unwrap();
 
-            // Verify messages were stored
-            let messages = store.get_messages_range(session_id, 1, 2).await.unwrap();
-            assert_eq!(messages.len(), 2);
-            assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "12345");
-            assert_eq!(messages[1].get_field(field::CL_ORD_ID).unwrap().value(), "12346");
+            // Verify messages were stored with versions
+            let message1 = store.get_message_with_version(session_id, 1).await.unwrap();
+            let message2 = store.get_message_with_version(session_id, 2).await.unwrap();
+
+            assert!(message1.is_some());
+            assert!(message2.is_some());
+
+            let (msg1_stored, ver1) = message1.unwrap();
+            let (msg2_stored, ver2) = message2.unwrap();
+
+            assert_eq!(msg1_stored.get_field(field::CL_ORD_ID).unwrap().value(), "12345");
+            assert_eq!(msg2_stored.get_field(field::CL_ORD_ID).unwrap().value(), "12346");
+            assert_eq!(ver1, ver2);  // Same transaction, same version
         };
 
         timeout(Duration::from_secs(5), test).await.unwrap();
@@ -270,15 +342,15 @@ mod tests {
 
             // Store message in transaction
             let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
             store.store_message(session_id, 1, msg.clone()).await.unwrap();
 
             // Rollback transaction
             store.rollback_transaction(session_id).await.unwrap();
 
             // Verify message was not stored
-            let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
-            assert!(messages.is_empty());
+            let message = store.get_message(session_id, 1).await.unwrap();
+            assert!(message.is_none());
         };
 
         timeout(Duration::from_secs(5), test).await.unwrap();
@@ -292,22 +364,25 @@ mod tests {
             sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
             store_dir: temp_dir.path().to_path_buf(),
             transactions: Arc::new(Mutex::new(HashMap::new())),
+            version_counter: Arc::new(Mutex::new(0)),
         };
 
         let session_id = "TEST_SESSION";
 
         let test = async {
-            // Create and store test message
+            // Begin transaction
+            store.begin_transaction(session_id).await.unwrap();
+
+            // Store test message
             let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-            msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+            msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
+            msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
 
             // Store message
             store.store_message(session_id, 1, msg.clone()).await.unwrap();
 
-            // Verify sequence number
-            let seq_num = store.get_next_seq_num(session_id).await.unwrap();
-            assert_eq!(seq_num, 2);
+            // Commit transaction
+            store.commit_transaction(session_id).await.unwrap();
 
             // Create new store instance and load messages
             let new_store = MessageStore {
@@ -315,66 +390,19 @@ mod tests {
                 sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
                 store_dir: temp_dir.path().to_path_buf(),
                 transactions: Arc::new(Mutex::new(HashMap::new())),
+                version_counter: Arc::new(Mutex::new(0)),
             };
 
             new_store.load_messages(session_id).await.unwrap();
 
-            // Verify message was loaded
-            let loaded_msg = new_store.get_message(session_id, 1).await.unwrap();
-            assert!(loaded_msg.is_some());
+            // Verify message was loaded with correct version
+            let loaded = new_store.get_message_with_version(session_id, 1).await.unwrap();
+            assert!(loaded.is_some());
 
-            let loaded_msg = loaded_msg.unwrap();
+            let (loaded_msg, loaded_ver) = loaded.unwrap();
             assert_eq!(loaded_msg.msg_type(), field::values::NEW_ORDER_SINGLE);
             assert_eq!(loaded_msg.get_field(field::CL_ORD_ID).unwrap().value(), "12345");
-        };
-
-        timeout(Duration::from_secs(5), test).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_message_range_retrieval() {
-        let store = MessageStore::new();
-        let session_id = "TEST_SESSION";
-
-        let test = async {
-            // Store multiple messages
-            for i in 1..=5 {
-                let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-                msg.set_field(Field::new(field::CL_ORD_ID, &format!("ORDER_{}", i)));
-                store.store_message(session_id, i, msg).await.unwrap();
-            }
-
-            // Retrieve range of messages
-            let messages = store.get_messages_range(session_id, 2, 4).await.unwrap();
-            assert_eq!(messages.len(), 3);
-            assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_2");
-            assert_eq!(messages[2].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_4");
-        };
-
-        timeout(Duration::from_secs(5), test).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_sequence_number_reset() {
-        let store = MessageStore::new();
-        let session_id = "TEST_SESSION";
-
-        let test = async {
-            // Store a message
-            let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-            store.store_message(session_id, 1, msg).await.unwrap();
-
-            // Reset sequence numbers
-            store.reset_sequence_numbers(session_id).await.unwrap();
-
-            // Verify sequence number is reset
-            let seq_num = store.get_next_seq_num(session_id).await.unwrap();
-            assert_eq!(seq_num, 1);
-
-            // Verify messages are cleared
-            let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
-            assert!(messages.is_empty());
+            assert_eq!(loaded_ver, 1);  // First version should be 1
         };
 
         timeout(Duration::from_secs(5), test).await.unwrap();

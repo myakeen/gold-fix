@@ -1,5 +1,5 @@
-//! A FIX protocol engine implementation in Rust
-//! Inspired by QuickFix/n
+//! GoldFix: A FIX protocol engine implementation in Rust
+//! A high-performance implementation focusing on reliability and atomic operations
 
 pub mod message;
 pub mod session;
