@@ -36,6 +36,43 @@ impl MessageParser {
 
         message.ok_or_else(|| FixError::ParseError("Missing message type".into()))
     }
+
+    pub fn extract_complete_message(buffer: &[u8]) -> Option<(String, usize)> {
+        let mut start_idx = None;
+        let mut end_idx = None;
+
+        // Find the start of the message (8=FIX)
+        for (i, window) in buffer.windows(2).enumerate() {
+            if window == b"8=" {
+                start_idx = Some(i);
+                break;
+            }
+        }
+
+        // Find the end of the message (10=xxx<SOH>)
+        if let Some(start) = start_idx {
+            for (i, window) in buffer[start..].windows(4).enumerate() {
+                if window[0] == b'1' && window[1] == b'0' && window[2] == b'=' {
+                    // Look for the SOH character after the checksum
+                    for j in i + 3..buffer.len() {
+                        if buffer[j] == 1 {  // SOH character
+                            end_idx = Some(start + j + 1);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        if let (Some(start), Some(end)) = (start_idx, end_idx) {
+            if let Ok(msg_str) = String::from_utf8(buffer[start..end].to_vec()) {
+                return Some((msg_str, end));
+            }
+        }
+
+        None
+    }
 }
 
 #[cfg(test)]
@@ -49,5 +86,23 @@ mod tests {
         assert!(result.is_ok());
         let message = result.unwrap();
         assert_eq!(message.msg_type(), "A");
+    }
+
+    #[test]
+    fn test_extract_complete_message() {
+        let msg = b"8=FIX.4.2\x0149=SENDER\x0156=TARGET\x0135=0\x0134=1\x0152=20250124-12:00:00\x0110=123\x01";
+        let result = MessageParser::extract_complete_message(msg);
+        assert!(result.is_some());
+        let (msg_str, len) = result.unwrap();
+        assert_eq!(len, msg.len());
+        assert!(msg_str.starts_with("8=FIX.4.2"));
+        assert!(msg_str.ends_with("\u{1}"));
+    }
+
+    #[test]
+    fn test_parse_invalid_message() {
+        let msg_str = "invalid message";
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_err());
     }
 }

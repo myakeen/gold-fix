@@ -2,8 +2,9 @@ pub mod field;
 pub mod parser;
 pub mod validator;
 
+use chrono;
 use std::collections::HashMap;
-use field::Field;
+pub use field::Field;  // Re-export Field for use in other modules
 use crate::Result;
 
 #[derive(Debug, Clone)]
@@ -14,10 +15,22 @@ pub struct Message {
 
 impl Message {
     pub fn new(msg_type: &str) -> Self {
-        Message {
+        let mut msg = Message {
             fields: HashMap::new(),
             msg_type: msg_type.to_string(),
-        }
+        };
+        msg.set_default_headers();
+        msg
+    }
+
+    fn set_default_headers(&mut self) {
+        // Set BeginString
+        self.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        // Set MsgType
+        self.set_field(Field::new(field::MSG_TYPE, &self.msg_type));
+        // Set current time as SendingTime
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
+        self.set_field(Field::new(field::SENDING_TIME, timestamp));
     }
 
     pub fn set_field(&mut self, field: Field) {
@@ -34,33 +47,36 @@ impl Message {
 
     pub fn to_string(&self) -> Result<String> {
         let mut msg = String::new();
-        // Build FIX message string
-        // Begin string
-        msg.push_str("8=FIX.4.2\u{1}"); // BeginString
-        msg.push_str(&format!("9={}\u{1}", 0)); // BodyLength (placeholder)
-        msg.push_str(&format!("35={}\u{1}", self.msg_type)); // MsgType
 
-        // Add all other fields
-        for (_, field) in self.fields.iter() {
-            if field.tag() != field::BEGIN_STRING && 
-               field.tag() != field::BODY_LENGTH && 
-               field.tag() != field::MSG_TYPE {
-                msg.push_str(&format!("{}={}\u{1}", field.tag(), field.value()));
+        // Start with BeginString (tag 8)
+        if let Some(begin_str) = self.get_field(field::BEGIN_STRING) {
+            msg.push_str(&format!("8={}\u{1}", begin_str.value()));
+        }
+
+        // Add BodyLength placeholder
+        msg.push_str("9=0000\u{1}");
+
+        // Add MsgType
+        msg.push_str(&format!("35={}\u{1}", self.msg_type));
+
+        // Add all other fields except BeginString, BodyLength, and Checksum
+        for (&tag, field) in self.fields.iter() {
+            if tag != field::BEGIN_STRING && tag != field::BODY_LENGTH && tag != field::CHECKSUM {
+                msg.push_str(&format!("{}={}\u{1}", tag, field.value()));
             }
         }
 
-        // Calculate body length and checksum
-        let body_length = msg.len();
-        let checksum = calculate_checksum(&msg);
+        // Calculate body length (excluding BeginString and Checksum)
+        let body_start = msg.find("9=").unwrap_or(0);
+        let body_length = msg[body_start..].len();
 
         // Replace body length placeholder
-        msg = msg.replace("9=0\u{1}", &format!("9={}\u{1}", body_length));
+        let body_length_str = format!("9={:04}\u{1}", body_length);
+        msg = msg.replace("9=0000\u{1}", &body_length_str);
 
-        // Add checksum
+        // Calculate and add checksum
+        let checksum = calculate_checksum(&msg);
         msg.push_str(&format!("10={:03}\u{1}", checksum));
-
-        // Validate message before sending
-        validator::MessageValidator::validate(self)?;
 
         Ok(msg)
     }
@@ -92,12 +108,13 @@ mod tests {
         msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
         msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
         msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
-        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
 
         let result = msg.to_string();
         assert!(result.is_ok());
         let msg_str = result.unwrap();
+        assert!(msg_str.starts_with("8=FIX.4.2"));
         assert!(msg_str.contains("35=0"));
         assert!(msg_str.contains("49=SENDER"));
+        assert!(msg_str.contains("56=TARGET"));
     }
 }

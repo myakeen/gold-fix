@@ -1,6 +1,8 @@
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::message::Message;
+use crate::message::{Message, Field};
+use crate::message::field::{self, values};
+use crate::message::parser::MessageParser;
 use crate::Result;
 
 pub struct Transport {
@@ -31,9 +33,12 @@ impl Transport {
             n => {
                 self.buffer.extend_from_slice(&temp_buf[..n]);
 
-                // Process complete messages
-                if let Some(msg_str) = self.extract_message() {
-                    let message = crate::message::parser::MessageParser::parse(&msg_str)?;
+                if let Some((msg_str, consumed)) = MessageParser::extract_complete_message(&self.buffer) {
+                    // Remove consumed bytes from buffer
+                    self.buffer.drain(..consumed);
+
+                    // Parse the message
+                    let message = MessageParser::parse(&msg_str)?;
                     Ok(Some(message))
                 } else {
                     Ok(None)
@@ -41,13 +46,56 @@ impl Transport {
             }
         }
     }
+}
 
-    fn extract_message(&mut self) -> Option<String> {
-        if let Some(pos) = self.buffer.iter().position(|&b| b == b'\x01') {
-            let msg_data = self.buffer.drain(..=pos).collect::<Vec<_>>();
-            String::from_utf8(msg_data).ok()
-        } else {
-            None
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_transport_send_receive() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Client connection
+        let client = tokio::spawn(async move {
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let mut transport = Transport::new(stream);
+
+            // Create and send a heartbeat message
+            let mut msg = Message::new(values::HEARTBEAT);
+            msg.set_field(Field::new(field::SENDER_COMP_ID, "CLIENT"));
+            msg.set_field(Field::new(field::TARGET_COMP_ID, "SERVER"));
+            msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+
+            transport.send(&msg).await.unwrap();
+
+            // Wait for response
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            transport.receive().await.unwrap()
+        });
+
+        // Server connection
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut transport = Transport::new(stream);
+
+        // Receive message
+        let received = transport.receive().await.unwrap();
+        assert!(received.is_some());
+        let msg = received.unwrap();
+        assert_eq!(msg.msg_type(), values::HEARTBEAT);
+
+        // Send response
+        let mut response = Message::new(values::HEARTBEAT);
+        response.set_field(Field::new(field::SENDER_COMP_ID, "SERVER"));
+        response.set_field(Field::new(field::TARGET_COMP_ID, "CLIENT"));
+        response.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        transport.send(&response).await.unwrap();
+
+        // Wait for client
+        let client_result = client.await.unwrap();
+        assert!(client_result.is_some());
     }
 }
