@@ -1,7 +1,6 @@
-use fix_engine::{
+use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
-    message::{Message, Field},
 };
 use std::path::PathBuf;
 

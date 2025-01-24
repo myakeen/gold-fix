@@ -66,9 +66,9 @@ mod tests {
 
             // Create and send a heartbeat message
             let mut msg = Message::new(field::values::HEARTBEAT);
-            msg.set_field(Field::new(field::SENDER_COMP_ID, "CLIENT"));
-            msg.set_field(Field::new(field::TARGET_COMP_ID, "SERVER"));
-            msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+            let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, "CLIENT"));
+            let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, "SERVER"));
+            let _ = msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
 
             transport.send(&msg).await.unwrap();
 
@@ -89,9 +89,9 @@ mod tests {
 
         // Send response
         let mut response = Message::new(field::values::HEARTBEAT);
-        response.set_field(Field::new(field::SENDER_COMP_ID, "SERVER"));
-        response.set_field(Field::new(field::TARGET_COMP_ID, "CLIENT"));
-        response.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        let _ = response.set_field(Field::new(field::SENDER_COMP_ID, "SERVER"));
+        let _ = response.set_field(Field::new(field::TARGET_COMP_ID, "CLIENT"));
+        let _ = response.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
         transport.send(&response).await.unwrap();
 
         // Wait for client

@@ -111,6 +111,35 @@ Key features:
 - Automatic recovery of message versions
 - Transaction-safe persistence with rollback capability
 
+## Message Roundtrip Flow
+1. **Message Creation**:
+   ```rust
+   let mut msg = Message::new(values::NEW_ORDER_SINGLE);
+   msg.set_field(Field::new(field::CL_ORD_ID, "12345"))?;
+   msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
+   ```
+
+2. **Validation & Formatting**:
+   ```rust
+   MessageValidator::validate(&msg)?;
+   msg.set_formatter(field::PRICE, DecimalFormatter::new(2));
+   ```
+
+3. **Persistence**:
+   ```rust
+   store.begin_transaction(session_id).await?;
+   store.store_message(session_id, seq_num, msg.clone()).await?;
+   store.commit_transaction(session_id).await?;
+   ```
+
+4. **Transport**:
+   ```rust
+   transport.send(&msg).await?;
+   if let Some(response) = transport.receive().await? {
+       // Handle response
+   }
+   ```
+
 ## Current Features
 ✅ Implemented:
 - Message versioning and optimistic locking

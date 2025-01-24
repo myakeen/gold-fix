@@ -18,7 +18,6 @@ pub type Result<T> = std::result::Result<T, FixError>;
 /// The main FIX engine instance
 pub struct FixEngine {
     sessions: Arc<Mutex<Vec<session::Session>>>,
-    config: config::EngineConfig,
     logger: Arc<logging::Logger>,
     store: Arc<store::MessageStore>,
 }
@@ -30,7 +29,6 @@ impl FixEngine {
 
         FixEngine {
             sessions: Arc::new(Mutex::new(Vec::new())),
-            config,
             logger,
             store,
         }

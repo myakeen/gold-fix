@@ -1,4 +1,4 @@
-use fix_engine::{
+use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
     message::{Message, Field},
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 async fn test_engine_startup() {
     let config = create_test_config();
     let engine = FixEngine::new(config);
-    
+
     let result = engine.start().await;
     assert!(result.is_ok());
 }
@@ -17,9 +17,9 @@ async fn test_engine_startup() {
 #[tokio::test]
 async fn test_message_creation() {
     let mut message = Message::new("D"); // New Order Single
-    message.set_field(Field::new(11, "12345")); // ClOrdID
-    message.set_field(Field::new(55, "IBM")); // Symbol
-    
+    let _ = message.set_field(Field::new(11, "12345")); // ClOrdID
+    let _ = message.set_field(Field::new(55, "IBM")); // Symbol
+
     let msg_str = message.to_string().unwrap();
     assert!(msg_str.contains("35=D"));
     assert!(msg_str.contains("11=12345"));

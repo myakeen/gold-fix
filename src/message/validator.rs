@@ -210,21 +210,23 @@ impl MessageValidator {
 mod tests {
     use super::*;
     use crate::message::Field;
+    use crate::message::field::values;
+
 
     #[test]
     fn test_validate_logon() {
-        let mut msg = Message::new(field::values::LOGON);
-        // Add header fields
-        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
-        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
+        let mut msg = Message::new(values::LOGON);
+        // Add header fields with proper error handling
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        let _ = msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
+        let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        let _ = msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        let _ = msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
 
         // Add Logon-specific fields
-        msg.set_field(Field::new(field::ENCRYPT_METHOD, "0"));
-        msg.set_field(Field::new(field::HEART_BT_INT, "30"));
+        let _ = msg.set_field(Field::new(field::ENCRYPT_METHOD, "0"));
+        let _ = msg.set_field(Field::new(field::HEART_BT_INT, "30"));
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
@@ -233,8 +235,8 @@ mod tests {
     fn test_validate_missing_required_field() {
         let mut msg = Message::new(field::values::LOGON);
         // Missing some required fields
-        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        let _ = msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
 
         assert!(MessageValidator::validate(&msg).is_err());
     }
@@ -243,21 +245,21 @@ mod tests {
     fn test_validate_new_order_single() {
         let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
         // Add header fields
-        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::MSG_TYPE, field::values::NEW_ORDER_SINGLE));
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "2"));
-        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        let _ = msg.set_field(Field::new(field::MSG_TYPE, field::values::NEW_ORDER_SINGLE));
+        let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        let _ = msg.set_field(Field::new(field::MSG_SEQ_NUM, "2"));
+        let _ = msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
 
         // Add order fields
-        msg.set_field(Field::new(field::CL_ORD_ID, "123456"));
-        msg.set_field(Field::new(field::SYMBOL, "AAPL"));
-        msg.set_field(Field::new(field::SIDE, "1")); // Buy
-        msg.set_field(Field::new(field::ORD_TYPE, "2")); // Limit
-        msg.set_field(Field::new(field::QUANTITY, "100"));
-        msg.set_field(Field::new(field::TIME_IN_FORCE, "0")); // Day
-        msg.set_field(Field::new(field::PRICE, "150.50")); // Required for LIMIT orders
+        let _ = msg.set_field(Field::new(field::CL_ORD_ID, "123456"));
+        let _ = msg.set_field(Field::new(field::SYMBOL, "AAPL"));
+        let _ = msg.set_field(Field::new(field::SIDE, "1")); // Buy
+        let _ = msg.set_field(Field::new(field::ORD_TYPE, "2")); // Limit
+        let _ = msg.set_field(Field::new(field::QUANTITY, "100"));
+        let _ = msg.set_field(Field::new(field::TIME_IN_FORCE, "0")); // Day
+        let _ = msg.set_field(Field::new(field::PRICE, "150.50")); // Required for LIMIT orders
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
@@ -266,16 +268,16 @@ mod tests {
     fn test_validate_resend_request() {
         let mut msg = Message::new(field::values::RESEND_REQUEST);
         // Add header fields
-        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::MSG_TYPE, field::values::RESEND_REQUEST));
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
-        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        let _ = msg.set_field(Field::new(field::MSG_TYPE, field::values::RESEND_REQUEST));
+        let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        let _ = msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        let _ = msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
 
         // Add ResendRequest fields
-        msg.set_field(Field::new(field::BEGIN_SEQ_NO, "1"));
-        msg.set_field(Field::new(field::END_SEQ_NO, "10"));
+        let _ = msg.set_field(Field::new(field::BEGIN_SEQ_NO, "1"));
+        let _ = msg.set_field(Field::new(field::END_SEQ_NO, "10"));
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
