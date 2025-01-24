@@ -1,14 +1,13 @@
-use std::collections::HashMap;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime};
 use crate::Result;
 use crate::error::FixError;
 
-pub trait FieldFormatter: Send + Sync {
+pub trait FieldFormatter: Send + Sync + std::fmt::Debug {
     fn format(&self, value: &str) -> Result<String>;
     fn parse(&self, value: &str) -> Result<String>;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DateTimeFormatter;
 
 impl FieldFormatter for DateTimeFormatter {
@@ -25,15 +24,14 @@ impl FieldFormatter for DateTimeFormatter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct IntegerFormatter;
 
 impl FieldFormatter for IntegerFormatter {
     fn format(&self, value: &str) -> Result<String> {
-        value.parse::<i64>()
-            .map_err(|_| FixError::ParseError("Invalid integer value".into()))?
-            .to_string()
-            .into()
+        let num = value.parse::<i64>()
+            .map_err(|_| FixError::ParseError("Invalid integer value".into()))?;
+        Ok(num.to_string())
     }
 
     fn parse(&self, value: &str) -> Result<String> {
@@ -43,7 +41,7 @@ impl FieldFormatter for IntegerFormatter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DecimalFormatter {
     precision: usize,
 }
@@ -68,7 +66,7 @@ impl FieldFormatter for DecimalFormatter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CharFormatter;
 
 impl FieldFormatter for CharFormatter {
@@ -87,12 +85,12 @@ impl FieldFormatter for CharFormatter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StringFormatter;
 
 impl FieldFormatter for StringFormatter {
     fn format(&self, value: &str) -> Result<String> {
-        Ok(value.replace('|', "").into())
+        Ok(value.replace('|', ""))
     }
 
     fn parse(&self, value: &str) -> Result<String> {

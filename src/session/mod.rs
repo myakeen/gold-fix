@@ -1,5 +1,3 @@
-pub mod state;
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::net::TcpStream;
@@ -10,9 +8,10 @@ use crate::logging::Logger;
 use crate::message::{Message, Field, field};
 use crate::transport::Transport;
 use crate::Result;
-use crate::error::FixError;
 use crate::store::MessageStore;
 use chrono;
+
+pub mod state;
 
 pub struct Session {
     config: SessionConfig,
@@ -109,12 +108,18 @@ impl Session {
                     // Send test request
                     if let Some(transport) = transport_clone.lock().await.as_mut() {
                         let mut test_request = Message::new(field::values::TEST_REQUEST);
-                        test_request.set_field(Field::new(field::TEST_REQ_ID,
-                            format!("TEST_REQ_{}", chrono::Utc::now().timestamp())));
-
-                        if let Err(e) = transport.send(&test_request).await {
-                            logger_clone.log_event("ERROR", &format!("Failed to send test request: {}", e)).ok();
-                            break;
+                        match test_request.set_field(Field::new(field::TEST_REQ_ID,
+                            format!("TEST_REQ_{}", chrono::Utc::now().timestamp()))) {
+                                Ok(_) => {
+                                    if let Err(e) = transport.send(&test_request).await {
+                                        logger_clone.log_event("ERROR", &format!("Failed to send test request: {}", e)).ok();
+                                        break;
+                                    }
+                                },
+                                Err(e) => {
+                                    logger_clone.log_event("ERROR", &format!("Failed to create test request: {}", e)).ok();
+                                    break;
+                                }
                         }
                     }
                 } else {
@@ -165,11 +170,23 @@ impl Session {
                                     // Check for sequence gaps
                                     if seq_num > state.next_incoming_seq() {
                                         let mut resend_request = Message::new(field::values::RESEND_REQUEST);
-                                        resend_request.set_field(Field::new(field::BEGIN_SEQ_NO, state.next_incoming_seq().to_string()));
-                                        resend_request.set_field(Field::new(field::END_SEQ_NO, seq_num.to_string()));
-
-                                        if let Err(e) = transport.send(&resend_request).await {
-                                            logger_clone.log_event("ERROR", &format!("Failed to send resend request: {}", e)).ok();
+                                        match resend_request.set_field(Field::new(field::BEGIN_SEQ_NO, 
+                                            state.next_incoming_seq().to_string())) {
+                                                Ok(_) => {
+                                                    match resend_request.set_field(Field::new(field::END_SEQ_NO, seq_num.to_string())) {
+                                                        Ok(_) => {
+                                                            if let Err(e) = transport.send(&resend_request).await {
+                                                                logger_clone.log_event("ERROR", &format!("Failed to send resend request: {}", e)).ok();
+                                                            }
+                                                        },
+                                                        Err(e) => {
+                                                            logger_clone.log_event("ERROR", &format!("Failed to set END_SEQ_NO: {}", e)).ok();
+                                                        }
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    logger_clone.log_event("ERROR", &format!("Failed to set BEGIN_SEQ_NO: {}", e)).ok();
+                                                }
                                         }
                                         continue;
                                     }
@@ -195,10 +212,11 @@ impl Session {
                                 field::values::TEST_REQUEST => {
                                     let mut heartbeat = Message::new(field::values::HEARTBEAT);
                                     if let Some(test_req_id) = msg.get_field(field::TEST_REQ_ID) {
-                                        heartbeat.set_field(Field::new(field::TEST_REQ_ID, test_req_id.value()));
-                                    }
-                                    if let Err(e) = transport.send(&heartbeat).await {
-                                        logger_clone.log_event("ERROR", &format!("Failed to send heartbeat: {}", e)).ok();
+                                        if let Err(e) = heartbeat.set_field(Field::new(field::TEST_REQ_ID, test_req_id.value())) {
+                                            logger_clone.log_event("ERROR", &format!("Failed to set TEST_REQ_ID in heartbeat: {}", e)).ok();
+                                        } else if let Err(e) = transport.send(&heartbeat).await {
+                                            logger_clone.log_event("ERROR", &format!("Failed to send heartbeat: {}", e)).ok();
+                                        }
                                     }
                                 },
                                 field::values::HEARTBEAT => {
@@ -230,105 +248,6 @@ impl Session {
         });
     }
 
-
-
-    async fn process_message(&self, msg: &Message) -> Result<()> {
-        let mut state = self.state.lock().await;
-        let session_id = format!("{}_{}", self.config.sender_comp_id, self.config.target_comp_id);
-
-        // Store incoming message
-        if let Some(seq_num) = msg.get_field(field::MSG_SEQ_NUM) {
-            let seq_num = seq_num.value().parse::<i32>()
-                .map_err(|_| FixError::ParseError("Invalid MsgSeqNum".into()))?;
-
-            // Check for sequence gaps
-            if seq_num > state.next_incoming_seq() {
-                // Gap detected, request resend
-                drop(state);
-                self.send_resend_request(seq_num).await?;
-                return Ok(());
-            }
-
-            // Store message for potential resend requests
-            self.store.store_message(&session_id, seq_num, msg.clone()).await?;
-        }
-
-        match msg.msg_type() {
-            field::values::RESEND_REQUEST => {
-                let begin_seq = msg.get_field(field::BEGIN_SEQ_NO)
-                    .ok_or_else(|| FixError::ParseError("Missing BeginSeqNo".into()))?
-                    .value()
-                    .parse::<i32>()
-                    .map_err(|_| FixError::ParseError("Invalid BeginSeqNo".into()))?;
-
-                let end_seq = msg.get_field(field::END_SEQ_NO)
-                    .ok_or_else(|| FixError::ParseError("Missing EndSeqNo".into()))?
-                    .value()
-                    .parse::<i32>()
-                    .map_err(|_| FixError::ParseError("Invalid EndSeqNo".into()))?;
-
-                drop(state);
-                self.resend_messages(begin_seq, end_seq).await?;
-            },
-            field::values::LOGON => {
-                if *state.status() == state::Status::InitiateLogon {
-                    state.set_status(state::Status::Connected);
-                    state.reset_test_request_counter();
-                }
-            },
-            field::values::TEST_REQUEST => {
-                let mut heartbeat = Message::new(field::values::HEARTBEAT);
-                if let Some(test_req_id) = msg.get_field(field::TEST_REQ_ID) {
-                    heartbeat.set_field(Field::new(field::TEST_REQ_ID, test_req_id.value()));
-                }
-                drop(state);
-                self.transport.lock().await.as_mut().unwrap().send(&heartbeat).await.ok();
-            },
-            field::values::HEARTBEAT => {
-                state.reset_test_request_counter();
-            },
-            field::values::LOGOUT => {
-                state.set_status(state::Status::Disconnected);
-                drop(state);
-                //break; //removed break to prevent unexpected behavior
-            },
-            _ => {
-                state.increment_incoming_seq();
-                self.logger.log_event("INFO", &format!("Received message type: {}", msg.msg_type())).ok();
-            }
-        }
-        Ok(())
-    }
-
-
-    async fn send_resend_request(&self, expected_seq_num: i32) -> Result<()> {
-        let mut resend_request = Message::new(field::values::RESEND_REQUEST);
-        resend_request.set_field(Field::new(field::BEGIN_SEQ_NO, expected_seq_num.to_string()));
-        resend_request.set_field(Field::new(field::END_SEQ_NO, "0")); // Request all messages
-
-        if let Some(transport) = self.transport.lock().await.as_mut() {
-            transport.send(&resend_request).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn resend_messages(&self, begin_seq: i32, end_seq: i32) -> Result<()> {
-        let session_id = format!("{}_{}", self.config.sender_comp_id, self.config.target_comp_id);
-        let messages = self.store.get_messages_range(&session_id, begin_seq, end_seq).await?;
-
-        if let Some(transport) = self.transport.lock().await.as_mut() {
-            for msg in messages {
-                // Mark message as possible duplicate
-                let mut resend_msg = msg.clone();
-                resend_msg.set_field(Field::new(field::POSS_DUP_FLAG, "Y"));
-                transport.send(&resend_msg).await?;
-            }
-        }
-
-        Ok(())
-    }
-
     pub async fn stop(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         state.set_status(state::Status::Disconnecting);
@@ -345,20 +264,21 @@ impl Session {
 
     fn create_logon_message(&self) -> Message {
         let mut msg = Message::new(field::values::LOGON);
-        msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
-        msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
-        msg.set_field(Field::new(field::HEART_BT_INT, self.config.heart_bt_int.to_string()));
-        msg.set_field(Field::new(field::ENCRYPT_METHOD, "0")); // No encryption
-        msg.set_field(Field::new(field::RESET_SEQ_NUM_FLAG, "Y")); // Reset sequence numbers
+        // Using let _ to explicitly indicate we're handling the Result
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
+        let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
+        let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
+        let _ = msg.set_field(Field::new(field::HEART_BT_INT, self.config.heart_bt_int.to_string()));
+        let _ = msg.set_field(Field::new(field::ENCRYPT_METHOD, "0")); // No encryption
+        let _ = msg.set_field(Field::new(field::RESET_SEQ_NUM_FLAG, "Y")); // Reset sequence numbers
         msg
     }
 
     fn create_logout_message(&self) -> Message {
         let mut msg = Message::new(field::values::LOGOUT);
-        msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
-        msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
+        let _ = msg.set_field(Field::new(field::BEGIN_STRING, &self.config.begin_string));
+        let _ = msg.set_field(Field::new(field::SENDER_COMP_ID, &self.config.sender_comp_id));
+        let _ = msg.set_field(Field::new(field::TARGET_COMP_ID, &self.config.target_comp_id));
         msg
     }
 }

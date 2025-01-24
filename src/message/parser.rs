@@ -19,7 +19,9 @@ impl MessageParser {
 
             let parts: Vec<&str> = field_str.split('=').collect();
             if parts.len() != 2 {
-                continue;
+                return Err(FixError::ParseError(
+                    format!("Invalid field format: {}", field_str)
+                ));
             }
 
             if let Ok(tag) = parts[0].parse::<i32>() {
@@ -49,7 +51,14 @@ impl MessageParser {
             }
 
             if let Ok(tag) = parts[0].parse::<i32>() {
-                message.set_field(Field::new(tag, parts[1].to_string()));
+                message.set_field(Field::new(tag, parts[1].to_string()))
+                    .map_err(|e| FixError::ParseError(
+                        format!("Failed to set field {}: {}", tag, e)
+                    ))?;
+            } else {
+                return Err(FixError::ParseError(
+                    format!("Invalid tag number: {}", parts[0])
+                ));
             }
         }
 
@@ -70,11 +79,12 @@ impl MessageParser {
 
         // Find the end of the message (10=xxx<SOH>)
         if let Some(start) = start_idx {
-            for (i, window) in buffer[start..].windows(4).enumerate() {
+            let remaining = &buffer[start..];
+            for (i, window) in remaining.windows(4).enumerate() {
                 if window[0] == b'1' && window[1] == b'0' && window[2] == b'=' {
                     // Look for the SOH character after the checksum
-                    for j in i + 3..buffer.len() {
-                        if buffer[j] == 1 {  // SOH character
+                    for j in i + 3..remaining.len() {
+                        if remaining[j] == 1 {  // SOH character
                             end_idx = Some(start + j + 1);
                             break;
                         }
@@ -85,8 +95,10 @@ impl MessageParser {
         }
 
         if let (Some(start), Some(end)) = (start_idx, end_idx) {
-            if let Ok(msg_str) = String::from_utf8(buffer[start..end].to_vec()) {
-                return Some((msg_str, end));
+            if end <= buffer.len() {
+                return String::from_utf8(buffer[start..end].to_vec())
+                    .ok()
+                    .map(|msg_str| (msg_str, end));
             }
         }
 
@@ -137,5 +149,22 @@ mod tests {
         let msg_str = "invalid message";
         let result = MessageParser::parse(msg_str);
         assert!(result.is_err());
+        if let Err(FixError::ParseError(msg)) = result {
+            assert!(msg.contains("Invalid field format"));
+        } else {
+            panic!("Expected ParseError");
+        }
+    }
+
+    #[test]
+    fn test_parse_missing_required_fields() {
+        let msg_str = "8=FIX.4.2\u{1}9=73\u{1}"; // Missing MsgType
+        let result = MessageParser::parse(msg_str);
+        assert!(result.is_err());
+        if let Err(FixError::ParseError(msg)) = result {
+            assert!(msg.contains("Missing BeginString or MsgType"));
+        } else {
+            panic!("Expected ParseError");
+        }
     }
 }

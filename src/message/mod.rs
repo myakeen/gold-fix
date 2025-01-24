@@ -6,17 +6,27 @@ pub mod formatter;
 use chrono;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::fmt;
 pub use field::Field;  // Re-export Field for use in other modules
 use crate::Result;
 use crate::message::parser::MessageParser;
 use crate::error::FixError;
 use crate::message::formatter::FieldFormatter;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Message {
     fields: HashMap<i32, Field>,
     msg_type: String,
     formatters: HashMap<i32, Arc<dyn FieldFormatter>>,
+}
+
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Message")
+            .field("fields", &self.fields)
+            .field("msg_type", &self.msg_type)
+            .finish_non_exhaustive() // Skip formatters field in Debug output
+    }
 }
 
 impl Message {
@@ -164,8 +174,8 @@ mod tests {
 
         let fields = msg.fields();
         assert!(fields.contains_key(&field::CL_ORD_ID));
-        assert!(fields.contains_key(&field::BEGIN_STRING)); // Default header
-        assert!(fields.contains_key(&field::MSG_TYPE)); // Default header
+        assert!(fields.contains_key(&field::BEGIN_STRING));
+        assert!(fields.contains_key(&field::MSG_TYPE));
     }
 
     #[test]
