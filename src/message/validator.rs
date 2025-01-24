@@ -10,7 +10,6 @@ impl MessageValidator {
         // Check required header fields
         let required_header = vec![
             field::BEGIN_STRING,
-            field::BODY_LENGTH,
             field::MSG_TYPE,
             field::SENDER_COMP_ID,
             field::TARGET_COMP_ID,
@@ -43,6 +42,12 @@ impl MessageValidator {
         // Validate conditional fields
         Self::validate_conditional_fields(message)?;
 
+        // Validate sequence numbers
+        Self::validate_sequence_numbers(message)?;
+
+        // Validate sending time
+        Self::validate_sending_time(message)?;
+
         Ok(())
     }
 
@@ -51,7 +56,7 @@ impl MessageValidator {
         for (&tag, field) in message.fields() {
             match tag {
                 field::MSG_SEQ_NUM => {
-                    if field.value().parse::<i32>().is_err() {
+                    if field.value().parse::<i32>().is_err() || field.value().parse::<i32>().unwrap() <= 0 {
                         return Err(FixError::ParseError(
                             format!("Invalid MsgSeqNum value: {}", field.value())
                         ));
@@ -103,7 +108,46 @@ impl MessageValidator {
                     }
                 }
             },
+            field::values::RESEND_REQUEST => {
+                // Validate BeginSeqNo and EndSeqNo
+                if let (Some(begin_seq), Some(end_seq)) = (
+                    message.get_field(field::BEGIN_SEQ_NO),
+                    message.get_field(field::END_SEQ_NO)
+                ) {
+                    let begin = begin_seq.value().parse::<i32>().map_err(|_| 
+                        FixError::ParseError("Invalid BeginSeqNo".into()))?;
+                    let end = end_seq.value().parse::<i32>().map_err(|_| 
+                        FixError::ParseError("Invalid EndSeqNo".into()))?;
+                    if begin <= 0 || (end != 0 && end < begin) {
+                        return Err(FixError::ParseError(
+                            "Invalid sequence range in ResendRequest".into()
+                        ));
+                    }
+                }
+            },
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn validate_sending_time(message: &Message) -> Result<()> {
+        if let Some(sending_time) = message.get_field(field::SENDING_TIME) {
+            if !Self::is_valid_timestamp(sending_time.value()) {
+                return Err(FixError::ParseError(
+                    format!("Invalid SendingTime format: {}", sending_time.value())
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sequence_numbers(message: &Message) -> Result<()> {
+        if let Some(seq_num) = message.get_field(field::MSG_SEQ_NUM) {
+            let seq = seq_num.value().parse::<i32>()
+                .map_err(|_| FixError::ParseError("Invalid MsgSeqNum".into()))?;
+            if seq <= 0 {
+                return Err(FixError::ParseError("MsgSeqNum must be positive".into()));
+            }
         }
         Ok(())
     }
@@ -131,6 +175,10 @@ impl MessageValidator {
                 fields.insert(field::SYMBOL);
                 fields.insert(field::SIDE);
                 fields.insert(field::QUANTITY);
+            }
+            field::values::RESEND_REQUEST => {
+                fields.insert(field::BEGIN_SEQ_NO);
+                fields.insert(field::END_SEQ_NO);
             }
             _ => {}
         }
@@ -168,7 +216,6 @@ mod tests {
         let mut msg = Message::new(field::values::LOGON);
         // Add header fields
         msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::BODY_LENGTH, "100"));
         msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
         msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
         msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
@@ -197,7 +244,6 @@ mod tests {
         let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
         // Add header fields
         msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        msg.set_field(Field::new(field::BODY_LENGTH, "150"));
         msg.set_field(Field::new(field::MSG_TYPE, field::values::NEW_ORDER_SINGLE));
         msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
         msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
@@ -210,8 +256,26 @@ mod tests {
         msg.set_field(Field::new(field::SIDE, "1")); // Buy
         msg.set_field(Field::new(field::ORD_TYPE, "2")); // Limit
         msg.set_field(Field::new(field::QUANTITY, "100"));
-        msg.set_field(Field::new(field::PRICE, "150.50"));
         msg.set_field(Field::new(field::TIME_IN_FORCE, "0")); // Day
+        msg.set_field(Field::new(field::PRICE, "150.50")); // Required for LIMIT orders
+
+        assert!(MessageValidator::validate(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_resend_request() {
+        let mut msg = Message::new(field::values::RESEND_REQUEST);
+        // Add header fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        msg.set_field(Field::new(field::MSG_TYPE, field::values::RESEND_REQUEST));
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
+
+        // Add ResendRequest fields
+        msg.set_field(Field::new(field::BEGIN_SEQ_NO, "1"));
+        msg.set_field(Field::new(field::END_SEQ_NO, "10"));
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }

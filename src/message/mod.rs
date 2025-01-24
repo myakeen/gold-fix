@@ -1,18 +1,22 @@
 pub mod field;
 pub mod parser;
 pub mod validator;
+pub mod formatter;
 
 use chrono;
 use std::collections::HashMap;
+use std::sync::Arc;
 pub use field::Field;  // Re-export Field for use in other modules
 use crate::Result;
 use crate::message::parser::MessageParser;
 use crate::error::FixError;
+use crate::message::formatter::FieldFormatter;
 
 #[derive(Debug, Clone)]
 pub struct Message {
     fields: HashMap<i32, Field>,
     msg_type: String,
+    formatters: HashMap<i32, Arc<dyn FieldFormatter>>,
 }
 
 impl Message {
@@ -20,6 +24,7 @@ impl Message {
         let mut msg = Message {
             fields: HashMap::new(),
             msg_type: msg_type.to_string(),
+            formatters: HashMap::new(),
         };
         msg.set_default_headers();
         msg
@@ -29,23 +34,35 @@ impl Message {
         MessageParser::parse(msg_str)
     }
 
-    fn set_default_headers(&mut self) {
-        // Set BeginString
-        self.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
-        // Set MsgType
-        self.set_field(Field::new(field::MSG_TYPE, &self.msg_type));
-        // Set SendingTime
-        let timestamp = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
-        self.set_field(Field::new(field::SENDING_TIME, timestamp));
-        // Set default sender and target comp ids
-        self.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        self.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        // Set initial sequence number
-        self.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+    pub fn set_formatter(&mut self, tag: i32, formatter: impl FieldFormatter + 'static) {
+        self.formatters.insert(tag, Arc::new(formatter));
     }
 
-    pub fn set_field(&mut self, field: Field) {
-        self.fields.insert(field.tag(), field);
+    fn set_default_headers(&mut self) {
+        // Set BeginString
+        self.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        // Set MsgType
+        self.set_field(Field::new(field::MSG_TYPE, &self.msg_type)).unwrap();
+        // Set SendingTime
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
+        self.set_field(Field::new(field::SENDING_TIME, timestamp)).unwrap();
+        // Set default sender and target comp ids
+        self.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        self.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        // Set initial sequence number
+        self.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+    }
+
+    pub fn set_field(&mut self, field: Field) -> Result<()> {
+        let tag = field.tag();
+        let value = if let Some(formatter) = self.formatters.get(&tag) {
+            formatter.format(field.value())?
+        } else {
+            field.value().to_string()
+        };
+
+        self.fields.insert(tag, Field::new(tag, value));
+        Ok(())
     }
 
     pub fn get_field(&self, tag: i32) -> Option<&Field> {
@@ -111,13 +128,14 @@ fn calculate_checksum(msg: &str) -> u32 {
 mod tests {
     use super::*;
     use crate::message::field::values;
+    use crate::message::formatter::{DateTimeFormatter, DecimalFormatter};
 
     #[test]
     fn test_message_creation() {
         let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        msg.set_field(Field::new(field::SYMBOL, "AAPL"));
-        msg.set_field(Field::new(field::SIDE, values::BUY));
+        msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::SIDE, values::BUY)).unwrap();
 
         assert_eq!(msg.msg_type(), values::NEW_ORDER_SINGLE);
         assert_eq!(msg.get_field(field::SYMBOL).unwrap().value(), "AAPL");
@@ -126,9 +144,9 @@ mod tests {
     #[test]
     fn test_message_serialization() {
         let mut msg = Message::new(values::HEARTBEAT);
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
 
         let result = msg.to_string();
         assert!(result.is_ok());
@@ -142,7 +160,7 @@ mod tests {
     #[test]
     fn test_field_access() {
         let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+        msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
 
         let fields = msg.fields();
         assert!(fields.contains_key(&field::CL_ORD_ID));
@@ -153,12 +171,12 @@ mod tests {
     #[test]
     fn test_message_roundtrip() {
         let mut original = Message::new(values::NEW_ORDER_SINGLE);
-        original.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        original.set_field(Field::new(field::SYMBOL, "AAPL"));
-        original.set_field(Field::new(field::SIDE, values::BUY));
-        original.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
-        original.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
-        original.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+        original.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
+        original.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        original.set_field(Field::new(field::SIDE, values::BUY)).unwrap();
+        original.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        original.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        original.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
 
         let msg_str = original.to_string().unwrap();
         let parsed = Message::from_string(&msg_str).unwrap();
@@ -175,6 +193,29 @@ mod tests {
         assert_eq!(
             parsed.get_field(field::SIDE).unwrap().value(),
             original.get_field(field::SIDE).unwrap().value()
+        );
+    }
+
+    #[test]
+    fn test_message_with_formatters() {
+        let mut msg = Message::new(values::NEW_ORDER_SINGLE);
+
+        // Add formatters
+        msg.set_formatter(field::SENDING_TIME, DateTimeFormatter);
+        msg.set_formatter(field::PRICE, DecimalFormatter::new(2));
+
+        // Set fields with formatting
+        msg.set_field(Field::new(field::SENDING_TIME, "2025-01-24T12:34:56Z")).unwrap();
+        msg.set_field(Field::new(field::PRICE, "123.456")).unwrap();
+
+        // Verify formatted values
+        assert_eq!(
+            msg.get_field(field::SENDING_TIME).unwrap().value(),
+            "20250124-12:34:56"
+        );
+        assert_eq!(
+            msg.get_field(field::PRICE).unwrap().value(),
+            "123.46"
         );
     }
 }

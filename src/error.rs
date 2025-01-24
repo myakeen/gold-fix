@@ -7,6 +7,7 @@ pub enum FixError {
     SessionError(String),
     ConfigError(String),
     TransportError(String),
+    StoreError(String),
     IoError(std::io::Error),
 }
 
@@ -17,6 +18,7 @@ impl fmt::Display for FixError {
             FixError::SessionError(msg) => write!(f, "Session error: {}", msg),
             FixError::ConfigError(msg) => write!(f, "Config error: {}", msg),
             FixError::TransportError(msg) => write!(f, "Transport error: {}", msg),
+            FixError::StoreError(msg) => write!(f, "Store error: {}", msg),
             FixError::IoError(err) => write!(f, "IO error: {}", err),
         }
     }

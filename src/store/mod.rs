@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use crate::message::Message;
 use crate::Result;
@@ -11,7 +11,6 @@ use crate::error::FixError;
 /// Transaction state for atomic message operations
 #[derive(Debug)]
 struct Transaction {
-    session_id: String,
     messages: Vec<(i32, Message)>,
     started: bool,
 }
@@ -22,8 +21,6 @@ pub struct MessageStore {
     messages: Arc<Mutex<HashMap<String, HashMap<i32, Message>>>>,
     /// Next expected sequence number for each session
     sequence_numbers: Arc<Mutex<HashMap<String, i32>>>,
-    /// Queue of outgoing messages
-    outgoing_queue: Arc<Mutex<Vec<Message>>>,
     /// Store directory for persistence
     store_dir: PathBuf,
     /// Active transactions
@@ -33,16 +30,15 @@ pub struct MessageStore {
 impl MessageStore {
     pub fn new() -> Self {
         let store_dir = PathBuf::from("store");
-        std::fs::create_dir_all(&store_dir).expect("Failed to create store directory");
+        fs::create_dir_all(&store_dir).expect("Failed to create store directory");
 
         // Create session state directory
         let session_dir = store_dir.join("sessions");
-        std::fs::create_dir_all(&session_dir).expect("Failed to create session directory");
+        fs::create_dir_all(&session_dir).expect("Failed to create session directory");
 
         MessageStore {
             messages: Arc::new(Mutex::new(HashMap::new())),
             sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
-            outgoing_queue: Arc::new(Mutex::new(Vec::new())),
             store_dir,
             transactions: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -55,7 +51,6 @@ impl MessageStore {
         }
 
         transactions.insert(session_id.to_string(), Transaction {
-            session_id: session_id.to_string(),
             messages: Vec::new(),
             started: true,
         });
@@ -71,6 +66,9 @@ impl MessageStore {
         if !transaction.started {
             return Err(FixError::StoreError("Transaction not started".into()));
         }
+
+        // Drop the transactions lock before storing messages
+        drop(transactions);
 
         // Store all messages in the transaction
         for (seq_num, message) in transaction.messages {
@@ -89,20 +87,23 @@ impl MessageStore {
 
     pub async fn store_message(&self, session_id: &str, seq_num: i32, message: Message) -> Result<()> {
         // Check if part of a transaction
-        let mut transactions = self.transactions.lock().await;
-        if let Some(transaction) = transactions.get_mut(session_id) {
-            transaction.messages.push((seq_num, message.clone()));
-            return Ok(());
+        {
+            let mut transactions = self.transactions.lock().await;
+            if let Some(transaction) = transactions.get_mut(session_id) {
+                transaction.messages.push((seq_num, message.clone()));
+                return Ok(());
+            }
         }
-        drop(transactions);
 
         // Store in memory
         let mut messages = self.messages.lock().await;
         let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
         session_messages.insert(seq_num, message.clone());
+        drop(messages);
 
         let mut seq_nums = self.sequence_numbers.lock().await;
         seq_nums.insert(session_id.to_string(), seq_num + 1);
+        drop(seq_nums);
 
         // Persist to file with error handling
         self.persist_message(session_id, seq_num, &message).await?;
@@ -126,43 +127,6 @@ impl MessageStore {
         // Ensure data is written to disk
         file.flush()
             .map_err(|e| FixError::IoError(e))?;
-
-        Ok(())
-    }
-
-    pub async fn load_messages(&self, session_id: &str) -> Result<()> {
-        let file_path = self.store_dir.join(format!("{}.messages", session_id));
-        if !file_path.exists() {
-            return Ok(());
-        }
-
-        let file = File::open(&file_path)
-            .map_err(|e| FixError::IoError(e))?;
-        let reader = BufReader::new(file);
-        let mut messages = self.messages.lock().await;
-        let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
-        let mut max_seq = 0;
-
-        for line in reader.lines() {
-            let line = line.map_err(|e| FixError::IoError(e))?;
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-
-            if let Ok(seq_num) = parts[0].parse::<i32>() {
-                if let Ok(message) = Message::from_string(parts[1]) {
-                    session_messages.insert(seq_num, message);
-                    max_seq = max_seq.max(seq_num);
-                }
-            }
-        }
-
-        // Update sequence number
-        if max_seq > 0 {
-            let mut seq_nums = self.sequence_numbers.lock().await;
-            seq_nums.insert(session_id.to_string(), max_seq + 1);
-        }
 
         Ok(())
     }
@@ -198,10 +162,12 @@ impl MessageStore {
         // Reset in-memory sequence number
         let mut seq_nums = self.sequence_numbers.lock().await;
         seq_nums.insert(session_id.to_string(), 1);
+        drop(seq_nums);
 
         // Clear session messages from memory
         let mut messages = self.messages.lock().await;
         messages.remove(session_id);
+        drop(messages);
 
         // Truncate the message file for this session
         let file_path = self.store_dir.join(format!("{}.messages", session_id));
@@ -216,15 +182,42 @@ impl MessageStore {
         Ok(())
     }
 
-    pub async fn queue_outgoing_message(&self, message: Message) -> Result<()> {
-        let mut queue = self.outgoing_queue.lock().await;
-        queue.push(message);
-        Ok(())
-    }
+    pub async fn load_messages(&self, session_id: &str) -> Result<()> {
+        let file_path = self.store_dir.join(format!("{}.messages", session_id));
+        if !file_path.exists() {
+            return Ok(());
+        }
 
-    pub async fn get_next_outgoing_message(&self) -> Option<Message> {
-        let mut queue = self.outgoing_queue.lock().await;
-        queue.pop()
+        let file = File::open(&file_path)
+            .map_err(|e| FixError::IoError(e))?;
+        let reader = BufReader::new(file);
+        let mut messages = self.messages.lock().await;
+        let session_messages = messages.entry(session_id.to_string()).or_insert_with(HashMap::new);
+        let mut max_seq = 0;
+
+        for line in reader.lines() {
+            let line = line.map_err(|e| FixError::IoError(e))?;
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            if let Ok(seq_num) = parts[0].parse::<i32>() {
+                if let Ok(message) = Message::from_string(parts[1]) {
+                    session_messages.insert(seq_num, message);
+                    max_seq = max_seq.max(seq_num);
+                }
+            }
+        }
+
+        // Update sequence number
+        drop(messages);
+        if max_seq > 0 {
+            let mut seq_nums = self.sequence_numbers.lock().await;
+            seq_nums.insert(session_id.to_string(), max_seq + 1);
+        }
+
+        Ok(())
     }
 }
 
@@ -233,77 +226,37 @@ mod tests {
     use super::*;
     use crate::message::{Field, field};
     use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_message_persistence() {
-        let temp_dir = tempdir().unwrap();
-        let store = MessageStore {
-            messages: Arc::new(Mutex::new(HashMap::new())),
-            sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
-            outgoing_queue: Arc::new(Mutex::new(Vec::new())),
-            store_dir: temp_dir.path().to_path_buf(),
-            transactions: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        let session_id = "TEST_SESSION";
-
-        // Create and store test message
-        let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
-
-        // Store message
-        store.store_message(session_id, 1, msg.clone()).await.unwrap();
-
-        // Verify sequence number
-        let seq_num = store.get_next_seq_num(session_id).await.unwrap();
-        assert_eq!(seq_num, 2);
-
-        // Create new store instance and load messages
-        let new_store = MessageStore {
-            messages: Arc::new(Mutex::new(HashMap::new())),
-            sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
-            outgoing_queue: Arc::new(Mutex::new(Vec::new())),
-            store_dir: temp_dir.path().to_path_buf(),
-            transactions: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        new_store.load_messages(session_id).await.unwrap();
-
-        // Verify message was loaded
-        let loaded_msg = new_store.get_message(session_id, 1).await.unwrap();
-        assert!(loaded_msg.is_some());
-
-        let loaded_msg = loaded_msg.unwrap();
-        assert_eq!(loaded_msg.msg_type(), field::values::NEW_ORDER_SINGLE);
-        assert_eq!(loaded_msg.get_field(field::CL_ORD_ID).unwrap().value(), "12345");
-    }
+    use tokio::time::{timeout, Duration};
 
     #[tokio::test]
     async fn test_message_transaction() {
         let store = MessageStore::new();
         let session_id = "TEST_SESSION";
 
-        // Begin transaction
-        store.begin_transaction(session_id).await.unwrap();
+        let test = async {
+            // Begin transaction
+            store.begin_transaction(session_id).await.unwrap();
 
-        // Store messages in transaction
-        let mut msg1 = Message::new(field::values::NEW_ORDER_SINGLE);
-        msg1.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        store.store_message(session_id, 1, msg1.clone()).await.unwrap();
+            // Store messages in transaction
+            let mut msg1 = Message::new(field::values::NEW_ORDER_SINGLE);
+            msg1.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            store.store_message(session_id, 1, msg1.clone()).await.unwrap();
 
-        let mut msg2 = Message::new(field::values::NEW_ORDER_SINGLE);
-        msg2.set_field(Field::new(field::CL_ORD_ID, "12346"));
-        store.store_message(session_id, 2, msg2.clone()).await.unwrap();
+            let mut msg2 = Message::new(field::values::NEW_ORDER_SINGLE);
+            msg2.set_field(Field::new(field::CL_ORD_ID, "12346"));
+            store.store_message(session_id, 2, msg2.clone()).await.unwrap();
 
-        // Commit transaction
-        store.commit_transaction(session_id).await.unwrap();
+            // Commit transaction
+            store.commit_transaction(session_id).await.unwrap();
 
-        // Verify messages were stored
-        let messages = store.get_messages_range(session_id, 1, 2).await.unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "12345");
-        assert_eq!(messages[1].get_field(field::CL_ORD_ID).unwrap().value(), "12346");
+            // Verify messages were stored
+            let messages = store.get_messages_range(session_id, 1, 2).await.unwrap();
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "12345");
+            assert_eq!(messages[1].get_field(field::CL_ORD_ID).unwrap().value(), "12346");
+        };
+
+        timeout(Duration::from_secs(5), test).await.unwrap();
     }
 
     #[tokio::test]
@@ -311,20 +264,71 @@ mod tests {
         let store = MessageStore::new();
         let session_id = "TEST_SESSION";
 
-        // Begin transaction
-        store.begin_transaction(session_id).await.unwrap();
+        let test = async {
+            // Begin transaction
+            store.begin_transaction(session_id).await.unwrap();
 
-        // Store message in transaction
-        let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        store.store_message(session_id, 1, msg.clone()).await.unwrap();
+            // Store message in transaction
+            let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
+            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            store.store_message(session_id, 1, msg.clone()).await.unwrap();
 
-        // Rollback transaction
-        store.rollback_transaction(session_id).await.unwrap();
+            // Rollback transaction
+            store.rollback_transaction(session_id).await.unwrap();
 
-        // Verify message was not stored
-        let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
-        assert!(messages.is_empty());
+            // Verify message was not stored
+            let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
+            assert!(messages.is_empty());
+        };
+
+        timeout(Duration::from_secs(5), test).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_message_persistence() {
+        let temp_dir = tempdir().unwrap();
+        let store = MessageStore {
+            messages: Arc::new(Mutex::new(HashMap::new())),
+            sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
+            store_dir: temp_dir.path().to_path_buf(),
+            transactions: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let session_id = "TEST_SESSION";
+
+        let test = async {
+            // Create and store test message
+            let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
+            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
+
+            // Store message
+            store.store_message(session_id, 1, msg.clone()).await.unwrap();
+
+            // Verify sequence number
+            let seq_num = store.get_next_seq_num(session_id).await.unwrap();
+            assert_eq!(seq_num, 2);
+
+            // Create new store instance and load messages
+            let new_store = MessageStore {
+                messages: Arc::new(Mutex::new(HashMap::new())),
+                sequence_numbers: Arc::new(Mutex::new(HashMap::new())),
+                store_dir: temp_dir.path().to_path_buf(),
+                transactions: Arc::new(Mutex::new(HashMap::new())),
+            };
+
+            new_store.load_messages(session_id).await.unwrap();
+
+            // Verify message was loaded
+            let loaded_msg = new_store.get_message(session_id, 1).await.unwrap();
+            assert!(loaded_msg.is_some());
+
+            let loaded_msg = loaded_msg.unwrap();
+            assert_eq!(loaded_msg.msg_type(), field::values::NEW_ORDER_SINGLE);
+            assert_eq!(loaded_msg.get_field(field::CL_ORD_ID).unwrap().value(), "12345");
+        };
+
+        timeout(Duration::from_secs(5), test).await.unwrap();
     }
 
     #[tokio::test]
@@ -332,18 +336,22 @@ mod tests {
         let store = MessageStore::new();
         let session_id = "TEST_SESSION";
 
-        // Store multiple messages
-        for i in 1..=5 {
-            let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-            msg.set_field(Field::new(field::CL_ORD_ID, &format!("ORDER_{}", i)));
-            store.store_message(session_id, i, msg).await.unwrap();
-        }
+        let test = async {
+            // Store multiple messages
+            for i in 1..=5 {
+                let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
+                msg.set_field(Field::new(field::CL_ORD_ID, &format!("ORDER_{}", i)));
+                store.store_message(session_id, i, msg).await.unwrap();
+            }
 
-        // Retrieve range of messages
-        let messages = store.get_messages_range(session_id, 2, 4).await.unwrap();
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_2");
-        assert_eq!(messages[2].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_4");
+            // Retrieve range of messages
+            let messages = store.get_messages_range(session_id, 2, 4).await.unwrap();
+            assert_eq!(messages.len(), 3);
+            assert_eq!(messages[0].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_2");
+            assert_eq!(messages[2].get_field(field::CL_ORD_ID).unwrap().value(), "ORDER_4");
+        };
+
+        timeout(Duration::from_secs(5), test).await.unwrap();
     }
 
     #[tokio::test]
@@ -351,20 +359,24 @@ mod tests {
         let store = MessageStore::new();
         let session_id = "TEST_SESSION";
 
-        // Store a message
-        let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
-        store.store_message(session_id, 1, msg).await.unwrap();
+        let test = async {
+            // Store a message
+            let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
+            msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+            store.store_message(session_id, 1, msg).await.unwrap();
 
-        // Reset sequence numbers
-        store.reset_sequence_numbers(session_id).await.unwrap();
+            // Reset sequence numbers
+            store.reset_sequence_numbers(session_id).await.unwrap();
 
-        // Verify sequence number is reset
-        let seq_num = store.get_next_seq_num(session_id).await.unwrap();
-        assert_eq!(seq_num, 1);
+            // Verify sequence number is reset
+            let seq_num = store.get_next_seq_num(session_id).await.unwrap();
+            assert_eq!(seq_num, 1);
 
-        // Verify messages are cleared
-        let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
-        assert!(messages.is_empty());
+            // Verify messages are cleared
+            let messages = store.get_messages_range(session_id, 1, 1).await.unwrap();
+            assert!(messages.is_empty());
+        };
+
+        timeout(Duration::from_secs(5), test).await.unwrap();
     }
 }
