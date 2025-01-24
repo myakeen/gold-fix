@@ -8,3 +8,4 @@ tokio = { version = "1.43.0", features = ["full"] }
 serde = { version = "1.0.217", features = ["derive"] }
 toml = { version = "0.8.19", features = ["parse"] }
 chrono = "0.4.39"
+regex = "1.10.3"

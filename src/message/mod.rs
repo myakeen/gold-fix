@@ -45,6 +45,11 @@ impl Message {
         &self.msg_type
     }
 
+    // New method to expose fields for validation
+    pub fn fields(&self) -> &HashMap<i32, Field> {
+        &self.fields
+    }
+
     pub fn to_string(&self) -> Result<String> {
         let mut msg = String::new();
 
@@ -116,5 +121,16 @@ mod tests {
         assert!(msg_str.contains("35=0"));
         assert!(msg_str.contains("49=SENDER"));
         assert!(msg_str.contains("56=TARGET"));
+    }
+
+    #[test]
+    fn test_field_access() {
+        let mut msg = Message::new(values::NEW_ORDER_SINGLE);
+        msg.set_field(Field::new(field::CL_ORD_ID, "12345"));
+
+        let fields = msg.fields();
+        assert!(fields.contains_key(&field::CL_ORD_ID));
+        assert!(fields.contains_key(&field::BEGIN_STRING)); // Default header
+        assert!(fields.contains_key(&field::MSG_TYPE)); // Default header
     }
 }

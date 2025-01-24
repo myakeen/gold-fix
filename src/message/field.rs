@@ -56,6 +56,10 @@ pub const LAST_MSG_SEQ_NUM_PROCESSED: i32 = 369;
 pub const POSS_DUP_FLAG: i32 = 43;
 pub const ORIG_SENDING_TIME: i32 = 122;
 
+// Sequence reset and resend request fields
+pub const BEGIN_SEQ_NO: i32 = 7;
+pub const END_SEQ_NO: i32 = 16;
+
 // Common values for fields
 pub mod values {
     // Message types

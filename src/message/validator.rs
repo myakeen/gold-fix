@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use crate::message::{Message, field};
 use crate::Result;
 use crate::error::FixError;
@@ -37,6 +37,74 @@ impl MessageValidator {
             }
         }
 
+        // Validate field values
+        Self::validate_field_values(message)?;
+
+        // Validate conditional fields
+        Self::validate_conditional_fields(message)?;
+
+        Ok(())
+    }
+
+    fn validate_field_values(message: &Message) -> Result<()> {
+        // Validate field data types and ranges
+        for (&tag, field) in message.fields() {
+            match tag {
+                field::MSG_SEQ_NUM => {
+                    if field.value().parse::<i32>().is_err() {
+                        return Err(FixError::ParseError(
+                            format!("Invalid MsgSeqNum value: {}", field.value())
+                        ));
+                    }
+                },
+                field::PRICE | field::QUANTITY => {
+                    if let Err(_) = field.value().parse::<f64>() {
+                        return Err(FixError::ParseError(
+                            format!("Invalid numeric value for tag {}: {}", tag, field.value())
+                        ));
+                    }
+                },
+                field::SENDING_TIME => {
+                    if !Self::is_valid_timestamp(field.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid timestamp format: {}", field.value())
+                        ));
+                    }
+                },
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_conditional_fields(message: &Message) -> Result<()> {
+        match message.msg_type() {
+            field::values::EXECUTION_REPORT => {
+                // Validate ExecType and OrdStatus combination
+                if let (Some(exec_type), Some(ord_status)) = (
+                    message.get_field(field::EXEC_TYPE),
+                    message.get_field(field::ORD_STATUS)
+                ) {
+                    if !Self::is_valid_exec_type_ord_status(exec_type.value(), ord_status.value()) {
+                        return Err(FixError::ParseError(
+                            format!("Invalid ExecType({}) and OrdStatus({}) combination",
+                                exec_type.value(), ord_status.value())
+                        ));
+                    }
+                }
+            },
+            field::values::NEW_ORDER_SINGLE => {
+                // If OrderType is LIMIT, Price is required
+                if let Some(ord_type) = message.get_field(field::ORD_TYPE) {
+                    if ord_type.value() == field::values::LIMIT && message.get_field(field::PRICE).is_none() {
+                        return Err(FixError::ParseError(
+                            "Price is required for LIMIT orders".into()
+                        ));
+                    }
+                }
+            },
+            _ => {}
+        }
         Ok(())
     }
 
@@ -68,6 +136,26 @@ impl MessageValidator {
         }
         fields
     }
+
+    fn is_valid_timestamp(timestamp: &str) -> bool {
+        // Format: YYYYMMDD-HH:MM:SS or YYYYMMDD-HH:MM:SS.sss
+        let re = regex::Regex::new(r"^\d{8}-\d{2}:\d{2}:\d{2}(\.\d{3})?$").unwrap();
+        re.is_match(timestamp)
+    }
+
+    fn is_valid_exec_type_ord_status(exec_type: &str, ord_status: &str) -> bool {
+        // Define valid combinations of ExecType and OrdStatus
+        let valid_combinations: HashMap<&str, HashSet<&str>> = [
+            ("0", vec!["0", "1"].into_iter().collect()), // New -> New, Partial Fill
+            ("1", vec!["1", "2"].into_iter().collect()), // Partial Fill -> Partial Fill, Filled
+            ("2", vec!["2"].into_iter().collect()),      // Fill -> Filled
+            ("4", vec!["4"].into_iter().collect()),      // Canceled -> Canceled
+            ("C", vec!["C"].into_iter().collect()),      // Expired -> Expired
+        ].iter().cloned().collect();
+
+        valid_combinations.get(exec_type)
+            .map_or(false, |valid_statuses| valid_statuses.contains(ord_status))
+    }
 }
 
 #[cfg(test)]
@@ -86,7 +174,7 @@ mod tests {
         msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
         msg.set_field(Field::new(field::MSG_SEQ_NUM, "1"));
         msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
-        
+
         // Add Logon-specific fields
         msg.set_field(Field::new(field::ENCRYPT_METHOD, "0"));
         msg.set_field(Field::new(field::HEART_BT_INT, "30"));
@@ -100,7 +188,31 @@ mod tests {
         // Missing some required fields
         msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
         msg.set_field(Field::new(field::MSG_TYPE, field::values::LOGON));
-        
+
         assert!(MessageValidator::validate(&msg).is_err());
+    }
+
+    #[test]
+    fn test_validate_new_order_single() {
+        let mut msg = Message::new(field::values::NEW_ORDER_SINGLE);
+        // Add header fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2"));
+        msg.set_field(Field::new(field::BODY_LENGTH, "150"));
+        msg.set_field(Field::new(field::MSG_TYPE, field::values::NEW_ORDER_SINGLE));
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER"));
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET"));
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "2"));
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00"));
+
+        // Add order fields
+        msg.set_field(Field::new(field::CL_ORD_ID, "123456"));
+        msg.set_field(Field::new(field::SYMBOL, "AAPL"));
+        msg.set_field(Field::new(field::SIDE, "1")); // Buy
+        msg.set_field(Field::new(field::ORD_TYPE, "2")); // Limit
+        msg.set_field(Field::new(field::QUANTITY, "100"));
+        msg.set_field(Field::new(field::PRICE, "150.50"));
+        msg.set_field(Field::new(field::TIME_IN_FORCE, "0")); // Day
+
+        assert!(MessageValidator::validate(&msg).is_ok());
     }
 }
