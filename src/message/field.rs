@@ -30,3 +30,4 @@ pub const TARGET_COMP_ID: i32 = 56;
 pub const MSG_SEQ_NUM: i32 = 34;
 pub const SENDING_TIME: i32 = 52;
 pub const CHECKSUM: i32 = 10;
+pub const HEART_BT_INT: i32 = 108;  // Adding missing HeartBtInt field

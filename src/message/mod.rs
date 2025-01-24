@@ -3,7 +3,6 @@ pub mod parser;
 
 use std::collections::HashMap;
 use field::Field;
-use crate::error::FixError;
 use crate::Result;
 
 #[derive(Debug, Clone)]
@@ -51,7 +50,7 @@ impl Message {
 
         // Replace body length placeholder
         msg = msg.replace("9=0\u{1}", &format!("9={}\u{1}", body_length));
-        
+
         // Add checksum
         msg.push_str(&format!("10={:03}\u{1}", checksum));
 
