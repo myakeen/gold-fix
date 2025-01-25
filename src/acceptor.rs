@@ -1,8 +1,5 @@
-//! FIX Protocol Acceptor implementation
-//! Handles server-side connection acceptance and message flow
-
 use crate::{
-    config::{SessionConfig},
+    config::{SessionConfig, SessionRole},
     logging::Logger,
     message::MessagePool,
     session::Session,
@@ -17,7 +14,7 @@ use tokio::task::JoinHandle;
 
 /// FIX Acceptor implementation
 pub struct Acceptor {
-    pub(crate) sessions: Arc<Mutex<Vec<Session>>>,
+    pub sessions: Arc<Mutex<Vec<Session>>>,
     logger: Arc<Logger>,
     store: Arc<MessageStore>,
     message_pool: Arc<MessagePool>,
@@ -45,18 +42,19 @@ impl Acceptor {
         store: Arc<MessageStore>,
         message_pool: Arc<MessagePool>,
     ) {
+        let peer_addr = socket.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
         let session = Session::new(
             SessionConfig {
                 begin_string: "FIX.4.2".to_string(),
                 sender_comp_id: "ACCEPTOR".to_string(),
                 target_comp_id: "INITIATOR".to_string(),
-                target_addr: socket.peer_addr().unwrap().to_string(),
+                target_addr: peer_addr.to_string(),
                 heart_bt_int: 30,
                 reset_on_logon: true,
                 reset_on_logout: true,
                 reset_on_disconnect: true,
                 transport_config: None,
-                role: crate::config::SessionRole::Acceptor,
+                role: SessionRole::Acceptor,
             },
             Arc::clone(&logger),
             Arc::clone(&store),
@@ -115,14 +113,14 @@ impl Acceptor {
         self.listener = None;
 
         // Stop all sessions
-        let sessions = self.sessions.lock().await;
-        for session in sessions.iter() {
+        let mut sessions = self.sessions.lock().await;
+        for session in sessions.iter_mut() {
             session.stop().await?;
         }
         Ok(())
     }
 
-    /// Get active session count
+    /// Get active session count using async closure
     pub async fn active_session_count(&self) -> usize {
         let sessions = self.sessions.lock().await;
         let mut count = 0;

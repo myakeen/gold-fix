@@ -1,6 +1,6 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig},
+    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
     transport::TransportConfig,
 };
 use std::path::PathBuf;
@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_on_logout: true,
                 reset_on_disconnect: true,
                 transport_config: Some(transport_config),
+                role: SessionRole::Initiator,
             }
         ],
     };
@@ -60,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn test_error_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::error::Error>> {
     // Test invalid certificate handling
-    let _message_pool = engine.message_pool(); // Prefix with underscore to silence warning
+    let _message_pool = engine.message_pool();
 
     // 1. Test with invalid certificate (should fail)
     let config_invalid_cert = TransportConfig {
@@ -84,6 +85,7 @@ async fn test_error_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::err
         reset_on_logout: true,
         reset_on_disconnect: true,
         transport_config: Some(config_invalid_cert),
+        role: SessionRole::Initiator,
     }).await;
 
     assert!(result.is_err(), "Expected error with invalid certificate");
@@ -109,6 +111,7 @@ async fn test_error_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::err
         reset_on_logout: true,
         reset_on_disconnect: true,
         transport_config: Some(config_wrong_hostname),
+        role: SessionRole::Initiator,
     }).await;
 
     assert!(result.is_err(), "Expected error with wrong hostname");

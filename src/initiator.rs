@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 /// FIX Initiator implementation
 pub struct Initiator {
-    pub(crate) sessions: Arc<Mutex<Vec<Session>>>,
+    pub sessions: Arc<Mutex<Vec<Session>>>,
     logger: Arc<Logger>,
     store: Arc<MessageStore>,
     message_pool: Arc<MessagePool>,

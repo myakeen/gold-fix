@@ -105,6 +105,39 @@ impl FixEngine {
         Arc::clone(&self.message_pool)
     }
 
+    /// Get a session by its ID (format: "SENDER_COMP_ID_TARGET_COMP_ID")
+    pub async fn get_session(&self, session_id: &str) -> Result<Arc<session::Session>> {
+        let parts: Vec<&str> = session_id.split('_').collect();
+        if parts.len() != 2 {
+            return Err(FixError::ConfigError("Invalid session ID format".into()));
+        }
+
+        if let Some(initiator) = &self.initiator {
+            let sessions = initiator.sessions.lock().await;
+            for session in sessions.iter() {
+                if format!("{}_{}",
+                    session.config.sender_comp_id,
+                    session.config.target_comp_id) == session_id {
+                    return Ok(Arc::new(session.clone()));
+                }
+            }
+        }
+
+        if let Some(acceptor) = &self.acceptor {
+            let acceptor = acceptor.lock().await;
+            let sessions = acceptor.sessions.lock().await;
+            for session in sessions.iter() {
+                if format!("{}_{}",
+                    session.config.sender_comp_id,
+                    session.config.target_comp_id) == session_id {
+                    return Ok(Arc::new(session.clone()));
+                }
+            }
+        }
+
+        Err(FixError::ConfigError("Session not found".into()))
+    }
+
     /// Get all session IDs
     pub async fn get_session_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();

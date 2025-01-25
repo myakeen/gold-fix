@@ -1,11 +1,10 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
-    transport::TransportConfig,
+    config::{EngineConfig, LogConfig},
     message::{Message, Field},
 };
 use std::path::PathBuf;
-use std::time::Duration;
+use tokio::time::Duration;
 
 mod test_utils;
 use test_utils::*;
@@ -17,6 +16,9 @@ async fn test_engine_startup() {
 
     let result = engine.start().await;
     assert!(result.is_ok());
+
+    // Proper cleanup
+    let _ = engine.stop().await;
 }
 
 #[tokio::test]
@@ -27,6 +29,12 @@ async fn test_initiator_session() {
 
     let result = engine.start().await;
     assert!(result.is_ok());
+
+    // Allow time for connection establishment
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Proper cleanup
+    let _ = engine.stop().await;
 }
 
 #[tokio::test]
@@ -37,6 +45,12 @@ async fn test_acceptor_session() {
 
     let result = engine.start().await;
     assert!(result.is_ok());
+
+    // Allow time for connection setup
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Proper cleanup
+    let _ = engine.stop().await;
 }
 
 #[tokio::test]
@@ -66,7 +80,7 @@ async fn test_session_roles() {
 
 #[tokio::test]
 async fn test_session_connection() {
-    let (initiator_config, acceptor_config) = session_utils::create_test_session_pair().await.unwrap();
+    let (initiator_config, acceptor_config) = create_test_session_pair().await.unwrap();
 
     let mut engine_config = create_test_engine_config();
     engine_config.sessions = vec![initiator_config, acceptor_config];
@@ -80,19 +94,12 @@ async fn test_session_connection() {
 
     let session_ids = engine.get_session_ids().await;
     assert_eq!(session_ids.len(), 2);
+
+    // Proper cleanup
+    let _ = engine.stop().await;
 }
 
 fn create_test_engine_config() -> EngineConfig {
-    let transport_config = TransportConfig {
-        use_ssl: false,
-        cert_file: None,
-        key_file: None,
-        ca_file: None,
-        verify_peer: false,
-        buffer_size: 4096,
-        connection_timeout: Duration::from_secs(30),
-    };
-
     EngineConfig {
         log_config: LogConfig {
             log_directory: PathBuf::from("/tmp"),
@@ -101,46 +108,5 @@ fn create_test_engine_config() -> EngineConfig {
             log_messages: true,
         },
         sessions: vec![], // Initialize with an empty vector
-    }
-}
-
-
-// Placeholder functions for test_utils module -  REPLACE THESE WITH ACTUAL IMPLEMENTATIONS
-mod test_utils {
-    use goldfix::config::SessionConfig;
-    use tokio::time::Duration;
-
-    pub async fn create_test_session_pair() -> Result<(SessionConfig, SessionConfig), Box<dyn std::error::Error>> {
-        Ok((create_test_initiator_config(), create_test_acceptor_config()))
-    }
-
-    pub fn create_test_initiator_config() -> SessionConfig {
-        SessionConfig {
-            begin_string: "FIX.4.2".to_string(),
-            sender_comp_id: "INITIATOR".to_string(),
-            target_comp_id: "ACCEPTOR".to_string(),
-            target_addr: "127.0.0.1:8000".to_string(),
-            heart_bt_int: 30,
-            reset_on_logon: true,
-            reset_on_logout: true,
-            reset_on_disconnect: true,
-            transport_config: None,
-            role: SessionRole::Initiator,
-        }
-    }
-
-    pub fn create_test_acceptor_config() -> SessionConfig {
-        SessionConfig {
-            begin_string: "FIX.4.2".to_string(),
-            sender_comp_id: "ACCEPTOR".to_string(),
-            target_comp_id: "INITIATOR".to_string(),
-            target_addr: "127.0.0.1:8000".to_string(),
-            heart_bt_int: 30,
-            reset_on_logon: true,
-            reset_on_logout: true,
-            reset_on_disconnect: true,
-            transport_config: None,
-            role: SessionRole::Acceptor,
-        }
     }
 }

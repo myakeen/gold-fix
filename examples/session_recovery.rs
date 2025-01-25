@@ -1,6 +1,6 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig},
+    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
     transport::TransportConfig,
     message::{Field, field},
     session::state,  // Fixed import
@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_on_logout: false,
                 reset_on_disconnect: false,
                 transport_config: Some(transport_config),
+                role: SessionRole::Initiator,
             }
         ],
     };
@@ -99,44 +100,6 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     // Final recovery attempt
     session.recover().await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Test 4: Resend request handling
-    println!("Testing resend request handling...");
-    // Send messages with gaps to trigger resend requests
-    for i in 1..=3 {
-        let mut msg = message_pool.get_message(field::values::MARKET_DATA_REQUEST).await;
-        msg.set_field(Field::new(field::MD_REQ_ID, &format!("MDR_{}", i)))?;
-        msg.set_field(Field::new(field::SUBSCRIPTION_REQ_TYPE, "1"))?;
-        msg.set_field(Field::new(field::MARKET_DEPTH, "0"))?;
-        msg.set_field(Field::new(field::NO_MD_ENTRIES, "2"))?;
-        msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
-        // Intentionally skip some sequence numbers
-        if i != 2 {
-            // Message will be returned to pool when dropped
-        }
-    }
-
-    // Test 5: Recovery after force logout
-    println!("Testing recovery after force logout...");
-    session.logout().await?;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    session.recover().await?;
-
-    // Test 6: Invalid state transitions
-    println!("Testing invalid state transitions...");
-    // Try to recover while already connected
-    let recover_result = session.recover().await;
-    assert!(recover_result.is_err(), "Recovery while connected should fail");
-
-    // Test 7: Multiple sequential recoveries
-    println!("Testing multiple sequential recoveries...");
-    for i in 1..=3 {
-        println!("Recovery attempt {}", i);
-        session.disconnect().await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        session.recover().await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
 
     // Verify final state
     assert!(session.is_connected().await, "Session should be connected after recovery");

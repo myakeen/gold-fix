@@ -1,6 +1,6 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig},
+    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
     transport::TransportConfig,
 };
 use std::path::PathBuf;
@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reset_on_logout: true,
         reset_on_disconnect: true,
         transport_config: Some(config),
+        role: SessionRole::Initiator,
     };
 
     // Test case 2: Connection timeout
@@ -55,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reset_on_logout: true,
         reset_on_disconnect: true,
         transport_config: Some(timeout_config),
+        role: SessionRole::Initiator,
     };
 
     // Test case 3: Buffer overflow handling
@@ -82,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reset_on_logout: true,
         reset_on_disconnect: true,
         transport_config: Some(buffer_config),
+        role: SessionRole::Initiator,
     };
 
     // Create and configure the engine

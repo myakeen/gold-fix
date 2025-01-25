@@ -1,6 +1,6 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig},
+    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
     transport::TransportConfig,
     message::{Field, field},
 };
@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_on_logout: true,
                 reset_on_disconnect: true,
                 transport_config: Some(transport_config),
+                role: SessionRole::Initiator,
             }
         ],
     };
@@ -90,12 +91,12 @@ async fn test_message_throughput(engine: &FixEngine) -> Result<(), Box<dyn std::
 
         for i in 0..BATCH_SIZE {
             let msg_id = batch * BATCH_SIZE + i;
-            let message_pool = Arc::clone(&message_pool);  // Clone Arc for each iteration
+            let message_pool = Arc::clone(&message_pool);
             let mut msg = message_pool.get_message(field::values::MARKET_DATA_REQUEST).await;
             msg.set_field(Field::new(field::MD_REQ_ID, &format!("REQ_{}", msg_id)))?;
 
             let tx = tx.clone();
-            let message_pool = Arc::clone(&message_pool);  // Clone again for the async block
+            let message_pool = Arc::clone(&message_pool);
             futures.push(async move {
                 let _ = tx.send(()).await;
                 message_pool.return_message(msg).await;

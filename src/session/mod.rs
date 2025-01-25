@@ -395,6 +395,7 @@ mod tests {
     use std::path::PathBuf;
     use crate::config::LogConfig;
     use crate::transport::TransportConfig;
+    use crate::config::SessionRole;
 
     #[tokio::test]
     async fn test_session_lifecycle() {
@@ -407,7 +408,8 @@ mod tests {
             reset_on_logon: true,
             reset_on_logout: true,
             reset_on_disconnect: true,
-            transport_config: Some(TransportConfig::default()),  // Added missing field
+            transport_config: Some(TransportConfig::default()),
+            role: SessionRole::Initiator,
         };
 
         let log_config = LogConfig {
