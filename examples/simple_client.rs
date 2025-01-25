@@ -1,6 +1,6 @@
 use goldfix::{
     FixEngine,
-    config::{EngineConfig, SessionConfig, LogConfig},
+    config::{EngineConfig, SessionConfig, LogConfig, SessionRole},
     transport::TransportConfig,
 };
 use std::path::PathBuf;
@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_on_logout: true,
                 reset_on_disconnect: true,
                 transport_config: Some(transport_config),
+                role: SessionRole::Initiator,  // Explicitly set as initiator
             }
         ],
     };
