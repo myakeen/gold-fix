@@ -1,9 +1,11 @@
 use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
+    transport::TransportConfig,
     message::{Message, Field},
 };
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[tokio::test]
 async fn test_engine_startup() {
@@ -27,6 +29,16 @@ async fn test_message_creation() {
 }
 
 fn create_test_config() -> EngineConfig {
+    let transport_config = TransportConfig {
+        use_ssl: false,
+        cert_file: None,
+        key_file: None,
+        ca_file: None,
+        verify_peer: false,
+        buffer_size: 4096,
+        connection_timeout: Duration::from_secs(30),
+    };
+
     EngineConfig {
         log_config: LogConfig {
             log_directory: PathBuf::from("/tmp"),
@@ -44,6 +56,7 @@ fn create_test_config() -> EngineConfig {
                 reset_on_logon: true,
                 reset_on_logout: true,
                 reset_on_disconnect: true,
+                transport_config: Some(transport_config),
             }
         ],
     }

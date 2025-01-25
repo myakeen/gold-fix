@@ -3,7 +3,7 @@ use goldfix::{
     config::{EngineConfig, SessionConfig, LogConfig},
     transport::TransportConfig,
     message::{Field, field},
-    state,
+    session::state,  // Fixed import
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -70,7 +70,7 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
         msg.set_field(Field::new(field::ORDER_ID, &format!("ORDER_{}", i)))?;
         msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
         msg.set_field(Field::new(field::SIDE, "1"))?;  // Buy
-        msg.set_field(Field::new(field::ORDER_QTY, "100"))?;
+        msg.set_field(Field::new(field::ORDER_QTY.to_string(), "100"))?;  // Fixed field name
         msg.set_field(Field::new(field::PRICE, "150.50"))?;
         msg.set_field(Field::new(field::ORD_TYPE, "2"))?;  // Limit order
         // Message will be automatically returned to pool when dropped
@@ -84,7 +84,7 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     // Test 3: Session state recovery
     println!("Testing session state recovery...");
     // Force disconnect and reconnect
-    let mut session = engine.get_session("RECOVERY_CLIENT_RECOVERY_SERVER").await?;
+    let session = engine.get_session("RECOVERY_CLIENT_RECOVERY_SERVER").await?;
     session.disconnect().await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     session.recover().await?;
@@ -95,7 +95,7 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     for i in 1..=3 {
         let mut msg = message_pool.get_message(field::values::MARKET_DATA_REQUEST).await;
         msg.set_field(Field::new(field::MD_REQ_ID, &format!("MDR_{}", i)))?;
-        msg.set_field(Field::new(field::SUBSCRIPTION_REQUEST_TYPE, "1"))?;
+        msg.set_field(Field::new(field::SUBSCRIPTION_REQ_TYPE, "1"))?;  // Fixed field name
         msg.set_field(Field::new(field::MARKET_DEPTH, "0"))?;
         // Intentionally skip some sequence numbers
         if i != 2 {
@@ -111,7 +111,8 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
 
     // Verify final state
     assert!(session.is_connected().await, "Session should be connected after recovery");
-    assert_eq!(session.get_state().await.status(), &state::Status::Connected);
+    let state = session.get_state().await?;
+    assert_eq!(*state.status(), state::Status::Connected);
 
     Ok(())
 }

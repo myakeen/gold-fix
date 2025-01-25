@@ -217,6 +217,7 @@ mod tests {
     use super::*;
     use tokio::net::TcpListener;
     use crate::message::{Field, field};
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_transport_plain_connection() {
@@ -261,5 +262,64 @@ mod tests {
         // Wait for client
         let client_result = client.await.unwrap();
         assert!(client_result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_transport_ssl_connection() {
+        // Setup test certificates
+        let config = TransportConfig {
+            use_ssl: true,
+            cert_file: Some(PathBuf::from("certs/client.crt")),
+            key_file: Some(PathBuf::from("certs/client.key")),
+            ca_file: Some(PathBuf::from("certs/ca.crt")),
+            verify_peer: true,
+            buffer_size: 4096,
+            connection_timeout: Duration::from_secs(30),
+        };
+
+        let transport = Transport::new_with_config(config);
+        assert!(transport.connection.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_transport_buffer_handling() {
+        let mut transport = Transport::new_with_config(TransportConfig::default());
+        let test_data = b"8=FIX.4.2|9=100|35=D|...|10=100|";
+        transport.buffer.extend_from_slice(test_data);
+
+        // Test buffer management
+        assert_eq!(transport.buffer.len(), test_data.len());
+        transport.buffer.clear();
+        assert_eq!(transport.buffer.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_transport_connection_timeout() {
+        let config = TransportConfig {
+            use_ssl: false,
+            cert_file: None,
+            key_file: None,
+            ca_file: None,
+            verify_peer: false,
+            buffer_size: 4096,
+            connection_timeout: Duration::from_millis(100),
+        };
+
+        let mut transport = Transport::new_with_config(config);
+        let result = transport.connect("256.256.256.256:12345").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transport_disconnection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let mut transport = Transport::new_with_config(TransportConfig::default());
+        transport.connect(&addr.to_string()).await.unwrap();
+        assert!(transport.connection.is_some());
+
+        transport.disconnect().await.unwrap();
+        assert!(transport.connection.is_none());
     }
 }

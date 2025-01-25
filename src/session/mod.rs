@@ -14,13 +14,14 @@ use chrono;
 
 pub mod state;
 
+#[derive(Clone)]  // Added Clone derivation
 pub struct Session {
-    config: SessionConfig,
+    pub config: SessionConfig,
     state: Arc<Mutex<state::SessionState>>,
     transport: Arc<Mutex<Option<Transport>>>,
     logger: Arc<Logger>,
     store: Arc<MessageStore>,
-    message_pool: Arc<MessagePool>,  // Add MessagePool
+    message_pool: Arc<MessagePool>,
 }
 
 impl Session {
@@ -393,6 +394,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use crate::config::LogConfig;
+    use crate::transport::TransportConfig;
 
     #[tokio::test]
     async fn test_session_lifecycle() {
@@ -405,6 +407,7 @@ mod tests {
             reset_on_logon: true,
             reset_on_logout: true,
             reset_on_disconnect: true,
+            transport_config: Some(TransportConfig::default()),  // Added missing field
         };
 
         let log_config = LogConfig {

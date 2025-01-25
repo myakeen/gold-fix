@@ -69,4 +69,26 @@ impl FixEngine {
     pub fn message_pool(&self) -> Arc<message::MessagePool> {
         Arc::clone(&self.message_pool)
     }
+
+    /// Get a session by its ID
+    pub async fn get_session(&self, session_id: &str) -> Result<Arc<session::Session>> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions.iter()
+            .find(|s| {
+                let config = &s.config;
+                format!("{}_{}", config.sender_comp_id, config.target_comp_id) == session_id
+            })
+            .ok_or_else(|| error::FixError::SessionNotFound(session_id.to_string()))?;
+
+        // Create a new Arc pointing to the session
+        Ok(Arc::new(session.clone()))
+    }
+
+    /// Get all session IDs
+    pub async fn get_session_ids(&self) -> Vec<String> {
+        let sessions = self.sessions.lock().await;
+        sessions.iter()
+            .map(|s| format!("{}_{}", s.config.sender_comp_id, s.config.target_comp_id))
+            .collect()
+    }
 }

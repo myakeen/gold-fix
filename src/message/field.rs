@@ -44,6 +44,7 @@ pub const SIDE: i32 = 54;
 pub const SYMBOL: i32 = 55;
 pub const TIME_IN_FORCE: i32 = 59;
 pub const QUANTITY: i32 = 38;
+pub const ORDER_QTY: i32 = 38;  // Alias for QUANTITY, commonly used in FIX messages
 pub const PRICE: i32 = 44;
 
 // Market Data Fields

@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn test_error_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::error::Error>> {
     // Test invalid certificate handling
-    let message_pool = engine.message_pool();
+    let _message_pool = engine.message_pool(); // Prefix with underscore to silence warning
 
     // 1. Test with invalid certificate (should fail)
     let config_invalid_cert = TransportConfig {
@@ -87,12 +87,6 @@ async fn test_error_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::err
     }).await;
 
     assert!(result.is_err(), "Expected error with invalid certificate");
-
-    // 2. Test with expired certificate scenario
-    // In real implementation, you would use an actual expired certificate
-
-    // 3. Test with revoked certificate scenario
-    // In real implementation, you would use an actual revoked certificate
 
     // 4. Test with mismatched hostname in certificate
     let config_wrong_hostname = TransportConfig {

@@ -2,7 +2,7 @@ use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
     transport::TransportConfig,
-    message::{Message, Field, field},
+    message::{Field, field},
 };
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     test_message_throughput(&engine).await?;
     let duration = start.elapsed();
-    
+
     println!("Performance test results:");
     println!("Total messages: {}", NUM_MESSAGES);
     println!("Total time: {:?}", duration);
@@ -87,13 +87,15 @@ async fn test_message_throughput(engine: &FixEngine) -> Result<(), Box<dyn std::
     // Send messages in batches
     for batch in 0..(NUM_MESSAGES / BATCH_SIZE) {
         let mut futures = Vec::with_capacity(BATCH_SIZE);
-        
+
         for i in 0..BATCH_SIZE {
             let msg_id = batch * BATCH_SIZE + i;
+            let message_pool = Arc::clone(&message_pool);  // Clone Arc for each iteration
             let mut msg = message_pool.get_message(field::values::MARKET_DATA_REQUEST).await;
             msg.set_field(Field::new(field::MD_REQ_ID, &format!("REQ_{}", msg_id)))?;
-            
+
             let tx = tx.clone();
+            let message_pool = Arc::clone(&message_pool);  // Clone again for the async block
             futures.push(async move {
                 let _ = tx.send(()).await;
                 message_pool.return_message(msg).await;
