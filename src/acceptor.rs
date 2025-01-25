@@ -8,10 +8,8 @@ use crate::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
-use futures::executor::block_on;
 
 pub struct Acceptor {
     sessions: Arc<Mutex<Vec<Session>>>,
@@ -120,7 +118,7 @@ impl Acceptor {
         let sessions = self.sessions.lock().await;
         let mut count = 0;
         for session in sessions.iter() {
-            if block_on(session.is_connected()) {
+            if session.is_connected().await {
                 count += 1;
             }
         }

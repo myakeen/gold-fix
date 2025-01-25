@@ -19,12 +19,18 @@ pub use initiator::Initiator;
 pub use acceptor::Acceptor;
 pub type Result<T> = std::result::Result<T, FixError>;
 
-/// The main FIX engine instance
-/// Can be configured as either an initiator or acceptor
+/// The main FIX engine instance that manages sessions and message handling.
+/// Can be configured as either an initiator or acceptor.
 pub struct FixEngine {
     initiator: Option<Arc<Initiator>>,
     acceptor: Option<Arc<Mutex<Acceptor>>>,
+    /// Logger instance shared across all sessions for consistent logging
+    /// Used indirectly through Arc cloning when creating new sessions
+    #[allow(dead_code)]
     logger: Arc<logging::Logger>,
+    /// Message store for persistence across all sessions
+    /// Used indirectly through Arc cloning for session message storage
+    #[allow(dead_code)]
     store: Arc<store::MessageStore>,
     message_pool: Arc<message::MessagePool>,
     config: Arc<config::EngineConfig>,

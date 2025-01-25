@@ -1,114 +1,127 @@
 # GoldFix: Rust FIX Protocol Engine
 
-A high-performance Financial Information eXchange (FIX) protocol engine implementation in Rust, featuring robust error handling, atomic message operations, and transaction support.
+A high-performance Financial Information eXchange (FIX) protocol engine implementation in Rust, featuring robust error handling, atomic message operations, SSL/TLS support, and comprehensive session management.
 
 ## Architecture Overview
 
-### Initiator/Acceptor Pattern Implementation
-The engine implements a clean separation between initiator (client) and acceptor (server) roles:
+### Core Components
+
+The engine is built on a modular architecture with clear separation of concerns:
 
 ```
                     GoldFix Engine
-                         |
-            +-----------+-----------+
-            |                       |
-        Initiator              Acceptor
-            |                       |
-    +-------+-------+      +-------+-------+
-    | Session Mgmt  |      | Connection    |
-    | Reconnection  |      | Acceptance    |
-    | Sequencing    |      | Session Mgmt  |
-    +-------+-------+      +-------+-------+
-            |                       |
-        Transport Layer        Transport Layer
+                          |
+             +-----------+-----------+
+             |                       |
+         Initiator              Acceptor
+             |                       |
+     +-------+-------+      +-------+-------+
+     | Session Mgmt  |      | Connection    |
+     | Reconnection  |      | Acceptance    |
+     | Sequencing    |      | Session Mgmt  |
+     +-------+-------+      +-------+-------+
+             |                       |
+         Transport Layer        Transport Layer
 ```
 
 #### Initiator (Client) Features
-- Active connection initiation
-- Session management with automatic reconnection
-- Sequence number tracking and gap detection
-- Message pooling for efficient memory usage
-- SSL/TLS client authentication
+- Active connection initiation and management
+- Automatic session recovery and reconnection
+- Robust sequence number tracking and gap detection
+- Message pooling for optimal memory usage
+- SSL/TLS client authentication support
+- Atomic persistence of session state
 
 #### Acceptor (Server) Features
-- Multi-session support
-- Concurrent connection handling
-- Efficient async I/O with Tokio
+- Multi-session support with concurrent connection handling
+- Efficient async I/O powered by Tokio
 - SSL/TLS server authentication
 - Connection backlog management
+- Session state persistence
+- Automatic recovery mechanisms
 
 ### Session Management
-- Clean state transitions
-- Heartbeat monitoring
+- Comprehensive state machine implementation
+- Persistent session state with atomic updates
+- Automatic heartbeat monitoring
 - Test request handling
-- Sequence number synchronization
-- Session recovery mechanisms
+- Advanced sequence number synchronization
+- Robust session recovery mechanisms
 
-### Core Components
+### Transport Layer
+1. **SSL/TLS Support**
+   - Certificate-based authentication
+   - Configurable verification policies
+   - Support for custom certificate chains
+   - Automatic certificate validation
 
-1. **Message Layer**
-   - Optimized parsing
-   - Type-safe field formatting
-   - Validation rules enforcement
-   - Pool-based message management
-
-2. **Transport Layer**
-   - SSL/TLS support
-   - Efficient buffer management
+2. **Connection Management**
+   - Configurable buffer sizes
    - Connection pooling
    - Automatic reconnection
+   - Timeout handling
 
-3. **Session Layer**
-   - State management
-   - Heartbeat handling
-   - Message sequencing
-   - Recovery procedures
+3. **Error Handling**
+   - Comprehensive error types
+   - Automatic recovery procedures
+   - Detailed error reporting
+   - Connection edge case handling
 
-## Project Structure
+### State Management
+1. **Session States**
+   - Created
+   - Connecting
+   - InitiateLogon
+   - ResendRequest
+   - LogonReceived
+   - Connected
+   - Disconnecting
+   - Disconnected
+   - Error
+   - Recovering
 
-```
-goldfix/
-├── src/
-│   ├── initiator.rs      # Initiator implementation
-│   ├── acceptor.rs       # Acceptor implementation
-│   ├── session/          # Session management
-│   ├── message/          # Message handling
-│   ├── transport/        # Transport layer
-│   └── store/           # Message storage
-├── tests/
-│   ├── test_utils.rs    # Shared test utilities
-│   └── integration_tests.rs
-└── examples/
-    ├── simple_client.rs
-    ├── session_recovery.rs
-    └── ssl_client.rs
-```
+2. **Persistence**
+   - Atomic state updates
+   - JSON-based storage
+   - Automatic recovery
+   - Transaction support
 
-## Testing Infrastructure
+## Implementation Status
 
-### Test Organization
-1. **Unit Tests**
-   - Component-level testing
-   - Mocked dependencies
-   - Fast execution
+✅ Implemented:
+- Core session management with state machine
+- Robust error handling and recovery mechanisms
+- Full SSL/TLS support with client/server authentication
+- Message pooling for memory optimization
+- Atomic message operations
+- Comprehensive logging system
+- Sequence number management
+- Heartbeat monitoring
+- Test request handling
+- Message persistence
+- Connection recovery
+- Edge case handling for network issues
 
-2. **Integration Tests**
-   - End-to-end scenarios
-   - Real network communication
-   - Session management validation
+🔄 In Progress:
+- Performance optimizations for high-frequency trading
+- Additional FIX message types
+- Extended market data support
+- Advanced recovery scenarios
+- Connection pooling improvements
+- Message routing enhancements
+- Load balancing capabilities
+- Session clustering support
+- Real-time monitoring dashboard
+- Message validation rules engine
+- Custom field dictionary support
+- Administrative API endpoints
 
-3. **Test Utilities**
-   - Shared test configurations
-   - Mock implementations
-   - Helper functions
-
-## Build and Run
-
-### Prerequisites
+## Prerequisites
 - Rust 1.54+
 - OpenSSL development libraries
+- Tokio runtime
 
-### Build Instructions
+## Build Instructions
 ```bash
 # Build the project
 cargo build
@@ -117,49 +130,8 @@ cargo build
 cargo test
 
 # Run specific example
-cargo run --example simple_client
+cargo run --example ssl_client
 ```
-
-### Configuration
-Sample configuration for initiator:
-```rust
-let config = SessionConfig {
-    begin_string: "FIX.4.2".to_string(),
-    sender_comp_id: "CLIENT".to_string(),
-    target_comp_id: "SERVER".to_string(),
-    target_addr: "127.0.0.1:8000".to_string(),
-    heart_bt_int: 30,
-    role: SessionRole::Initiator,
-    // ... other settings
-};
-```
-
-Sample configuration for acceptor:
-```rust
-let config = SessionConfig {
-    begin_string: "FIX.4.2".to_string(),
-    sender_comp_id: "SERVER".to_string(),
-    target_comp_id: "CLIENT".to_string(),
-    target_addr: "0.0.0.0:8000".to_string(),
-    heart_bt_int: 30,
-    role: SessionRole::Acceptor,
-    // ... other settings
-};
-```
-
-## Current Status
-
-✅ Implemented:
-- Initiator/Acceptor pattern
-- Session management
-- Message validation
-- SSL/TLS support
-- Comprehensive test suite
-
-🔄 In Progress:
-- Performance optimizations
-- Additional FIX message types
-- Extended market data support
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.

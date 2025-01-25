@@ -53,7 +53,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo build"
+args = "cargo build --all"
 
 [[workflows.workflow]]
 name = "Build Examples"
@@ -84,4 +84,4 @@ task = "shell.exec"
 args = "cargo test --all"
 
 [deployment]
-run = ["sh", "-c", "cargo build"]
+run = ["sh", "-c", "cargo build --all"]

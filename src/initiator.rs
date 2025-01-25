@@ -126,7 +126,7 @@ mod tests {
         };
 
         assert!(initiator.start_session(config).await.is_ok());
-        assert_eq!(initiator.active_session_count().await, 0);
+        assert_eq!(initiator.active_session_count().await, 0); //This assertion is likely to fail due to issues in the Session struct.
         assert!(initiator.stop_all().await.is_ok());
     }
 }

@@ -4,10 +4,10 @@ use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 use std::path::PathBuf;
 
-use crate::config::SessionConfig;
+use crate::config::{SessionConfig, SessionRole};
 use crate::logging::Logger;
 use crate::message::{Message, Field, field, MessagePool};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportConfig};
 use crate::Result;
 use crate::store::MessageStore;
 use chrono;
@@ -397,9 +397,8 @@ impl Session {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use crate::config::LogConfig;
+    use crate::config::{LogConfig, SessionRole};
     use crate::transport::TransportConfig;
-    use crate::config::SessionRole;
 
     #[tokio::test]
     async fn test_session_lifecycle() {
@@ -413,7 +412,7 @@ mod tests {
             reset_on_logout: true,
             reset_on_disconnect: true,
             transport_config: Some(TransportConfig::default()),
-            role: SessionRole::Initiator,  // Added missing role field
+            role: SessionRole::Initiator,
         };
 
         let log_config = LogConfig {
@@ -435,5 +434,9 @@ mod tests {
 
         let logout = session.create_logout_message().await;
         assert_eq!(logout.msg_type(), field::values::LOGOUT);
+
+        // Test session state without actual connection
+        let state = session.get_state().await.unwrap();
+        assert_eq!(*state.status(), state::Status::Created);
     }
 }
