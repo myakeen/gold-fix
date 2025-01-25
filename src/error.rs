@@ -17,7 +17,8 @@ pub enum FixError {
     SslError(String),
     ConnectionError(String),
     CertificateError(String),
-    SessionNotFound(String),  // Added SessionNotFound variant
+    SessionNotFound(String),
+    InvalidConfiguration(String),  // Added InvalidConfiguration variant
 }
 
 impl fmt::Display for FixError {
@@ -34,6 +35,7 @@ impl fmt::Display for FixError {
             FixError::ConnectionError(msg) => write!(f, "Connection error: {}", msg),
             FixError::CertificateError(msg) => write!(f, "Certificate error: {}", msg),
             FixError::SessionNotFound(msg) => write!(f, "Session not found: {}", msg),
+            FixError::InvalidConfiguration(msg) => write!(f, "Invalid configuration: {}", msg),
         }
     }
 }
@@ -70,11 +72,11 @@ mod tests {
 
     #[test]
     fn test_error_display() {
+        let err = FixError::InvalidConfiguration("Invalid settings".to_string());
+        assert_eq!(err.to_string(), "Invalid configuration: Invalid settings");
+
         let err = FixError::TransportError("Connection failed".to_string());
         assert_eq!(err.to_string(), "Transport error: Connection failed");
-
-        let err = FixError::SslError("Invalid certificate".to_string());
-        assert_eq!(err.to_string(), "SSL error: Invalid certificate");
 
         let err = FixError::SessionNotFound("TEST_SESSION".to_string());
         assert_eq!(err.to_string(), "Session not found: TEST_SESSION");

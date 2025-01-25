@@ -413,7 +413,7 @@ mod tests {
             reset_on_logout: true,
             reset_on_disconnect: true,
             transport_config: Some(TransportConfig::default()),
-            role: SessionRole::Initiator,
+            role: SessionRole::Initiator,  // Added missing role field
         };
 
         let log_config = LogConfig {

@@ -8,8 +8,8 @@ pub mod transport;
 pub mod error;
 pub mod logging;
 pub mod store;
-pub mod initiator;  // New module
-pub mod acceptor;   // New module
+pub mod initiator;
+pub mod acceptor;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -24,9 +24,7 @@ pub type Result<T> = std::result::Result<T, FixError>;
 pub struct FixEngine {
     initiator: Option<Arc<Initiator>>,
     acceptor: Option<Arc<Mutex<Acceptor>>>,
-    #[allow(dead_code)]
     logger: Arc<logging::Logger>,
-    #[allow(dead_code)]
     store: Arc<store::MessageStore>,
     message_pool: Arc<message::MessagePool>,
     config: Arc<config::EngineConfig>,
@@ -59,7 +57,7 @@ impl FixEngine {
 
     pub async fn start(&self) -> Result<()> {
         // Start initiator sessions if configured
-        if let Some(initiator) = &self.initiator {
+        if let Some(ref initiator) = self.initiator {
             for session in &self.config.sessions {
                 if session.is_initiator() {
                     initiator.start_session(session.clone()).await?;
@@ -68,7 +66,7 @@ impl FixEngine {
         }
 
         // Start acceptor if configured
-        if let Some(acceptor) = &self.acceptor {
+        if let Some(ref acceptor) = self.acceptor {
             let mut acceptor = acceptor.lock().await;
             for session in &self.config.sessions {
                 if session.is_acceptor() {
@@ -81,10 +79,10 @@ impl FixEngine {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        if let Some(initiator) = &self.initiator {
+        if let Some(ref initiator) = self.initiator {
             initiator.stop_all().await?;
         }
-        if let Some(acceptor) = &self.acceptor {
+        if let Some(ref acceptor) = self.acceptor {
             let mut acceptor = acceptor.lock().await;
             acceptor.stop().await?;
         }
@@ -93,14 +91,13 @@ impl FixEngine {
 
     pub async fn add_session(&self, session_config: config::SessionConfig) -> Result<()> {
         if session_config.is_initiator() {
-            if let Some(initiator) = &self.initiator {
+            if let Some(ref initiator) = self.initiator {
                 initiator.start_session(session_config).await?;
             }
         }
         Ok(())
     }
 
-    /// Get a reference to the message pool
     pub fn message_pool(&self) -> Arc<message::MessagePool> {
         Arc::clone(&self.message_pool)
     }
@@ -112,10 +109,14 @@ impl FixEngine {
             return Err(FixError::ConfigError("Invalid session ID format".into()));
         }
 
-        if let Some(initiator) = &self.initiator {
-            let sessions = initiator.sessions.lock().await;
+        let session_id = session_id.to_string();
+
+        // Check initiator sessions first
+        if let Some(ref initiator) = self.initiator {
+            // Use a method to get sessions instead of accessing the field directly
+            let sessions = initiator.get_sessions().await;
             for session in sessions.iter() {
-                if format!("{}_{}",
+                if format!("{}_{}", 
                     session.config.sender_comp_id,
                     session.config.target_comp_id) == session_id {
                     return Ok(Arc::new(session.clone()));
@@ -123,11 +124,13 @@ impl FixEngine {
             }
         }
 
-        if let Some(acceptor) = &self.acceptor {
+        // Then check acceptor sessions
+        if let Some(ref acceptor) = self.acceptor {
             let acceptor = acceptor.lock().await;
-            let sessions = acceptor.sessions.lock().await;
+            // Use a method to get sessions instead of accessing the field directly
+            let sessions = acceptor.get_sessions().await;
             for session in sessions.iter() {
-                if format!("{}_{}",
+                if format!("{}_{}", 
                     session.config.sender_comp_id,
                     session.config.target_comp_id) == session_id {
                     return Ok(Arc::new(session.clone()));
@@ -135,23 +138,23 @@ impl FixEngine {
             }
         }
 
-        Err(FixError::ConfigError("Session not found".into()))
+        Err(FixError::SessionNotFound(format!("Session not found: {}", session_id)))
     }
 
     /// Get all session IDs
     pub async fn get_session_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
 
-        if let Some(initiator) = &self.initiator {
-            let sessions = initiator.sessions.lock().await;
+        if let Some(ref initiator) = self.initiator {
+            let sessions = initiator.get_sessions().await;
             ids.extend(sessions.iter().map(|s| {
                 format!("{}_{}", s.config.sender_comp_id, s.config.target_comp_id)
             }));
         }
 
-        if let Some(acceptor) = &self.acceptor {
+        if let Some(ref acceptor) = self.acceptor {
             let acceptor = acceptor.lock().await;
-            let sessions = acceptor.sessions.lock().await;
+            let sessions = acceptor.get_sessions().await;
             ids.extend(sessions.iter().map(|s| {
                 format!("{}_{}", s.config.sender_comp_id, s.config.target_comp_id)
             }));
