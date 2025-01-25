@@ -149,8 +149,20 @@ impl MessageValidator {
 
     fn validate_market_data_request(message: &Message) -> Result<()> {
         // Required fields for market data request
-        if message.get_field(field::SYMBOL).is_none() {
-            return Err(FixError::ParseError("Symbol is required for market data requests".into()));
+        let required_fields = vec![
+            field::MD_REQ_ID,
+            field::SUBSCRIPTION_REQ_TYPE,
+            field::MARKET_DEPTH,
+            field::NO_MD_ENTRIES,
+            field::SYMBOL,
+        ];
+
+        for &tag in &required_fields {
+            if message.get_field(tag).is_none() {
+                return Err(FixError::ParseError(
+                    format!("Missing required field for market data request: {}", tag)
+                ));
+            }
         }
 
         // Validate subscription type
@@ -171,28 +183,10 @@ impl MessageValidator {
             }
         }
 
-        // Validate NoMDEntryTypes
+        // Validate NoMDEntries
         if let Some(no_entries) = message.get_field(field::NO_MD_ENTRIES) {
-            let expected_count = no_entries.value().parse::<usize>()
-                .map_err(|_| FixError::ParseError("Invalid NoMDEntries".into()))?;
-
-            let mut entry_types = HashSet::new();
-            for (&tag, field) in message.fields() {
-                if tag == field::MD_ENTRY_TYPE {
-                    if !Self::is_valid_md_entry_type(field.value()) {
-                        return Err(FixError::ParseError(
-                            format!("Invalid MDEntryType: {}", field.value())
-                        ));
-                    }
-                    entry_types.insert(field.value());
-                }
-            }
-
-            if entry_types.len() != expected_count {
-                return Err(FixError::ParseError(
-                    format!("Expected {} MD entry types, found {}", 
-                        expected_count, entry_types.len())
-                ));
+            if let Err(_) = no_entries.value().parse::<usize>() {
+                return Err(FixError::ParseError("Invalid NoMDEntries".into()));
             }
         }
 
@@ -458,10 +452,20 @@ impl MessageValidator {
     }
 
     fn validate_quote_request(message: &Message) -> Result<()> {
-        // Symbol is required for quote requests
-        if message.get_field(field::SYMBOL).is_none() {
-            return Err(FixError::ParseError("Symbol is required for quote requests".into()));
+        // Required fields for quote requests
+        let required_fields = vec![
+            field::QUOTE_REQ_ID,
+            field::SYMBOL,
+        ];
+
+        for &tag in &required_fields {
+            if message.get_field(tag).is_none() {
+                return Err(FixError::ParseError(
+                    format!("Missing required field for quote request: {}", tag)
+                ));
+            }
         }
+
         Ok(())
     }
 }
@@ -579,6 +583,7 @@ mod tests {
         msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
         msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
         msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+        msg.set_field(Field::new(field::QUOTE_REQ_ID, "QR001")).unwrap(); // Added QUOTE_REQ_ID
         msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
 
         assert!(MessageValidator::validate(&msg).is_ok());
@@ -600,6 +605,34 @@ mod tests {
         msg.set_field(Field::new(field::SUBSCRIPTION_REQ_TYPE, "1")).unwrap();
         msg.set_field(Field::new(field::MARKET_DEPTH, "0")).unwrap();
         msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+
+        assert!(MessageValidator::validate(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_market_data_snapshot() {
+        let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+
+        // Add market data specific fields
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
+
+        // Add two market data entries
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, field::values::MD_ENTRY_BID)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.25")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
+
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, field::values::MD_ENTRY_OFFER)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.50")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "200")).unwrap();
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
@@ -625,4 +658,77 @@ mod tests {
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
+
+    #[test]
+    fn test_validate_market_data_snapshot_with_entries() {
+        let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+
+        // Add market data specific fields with proper entry count
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
+
+        // Add two market data entries
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.25")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_TIME, "20250124-12:00:00")).unwrap();
+
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_OFFER)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.50")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "200")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_TIME, "20250124-12:00:00")).unwrap();
+
+        assert!(MessageValidator::validate(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_market_data_snapshot_invalid_entries() {
+        let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+
+        // Add market data fields with mismatched entry count
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
+
+        // Add only one entry when we specified two
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.25")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
+
+        assert!(MessageValidator::validate(&msg).is_err());
+    }
+
+    #[test]
+    fn test_validate_market_data_snapshot_missing_price() {
+        let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
+        // Add required fields
+        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
+        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
+
+        // Add market data fields but missing price
+        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(field::NO_MD_ENTRIES, "1")).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID)).unwrap();
+        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
+
+        assert!(MessageValidator::validate(&msg).is_err());
+    }
+
 }

@@ -64,13 +64,13 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
 
     // Test 1: Message persistence
     println!("Testing message persistence...");
-    // Send a batch of messages
+    // Send a batch of messages before disconnection
     for i in 1..=5 {
         let mut msg = message_pool.get_message(field::values::NEW_ORDER_SINGLE).await;
         msg.set_field(Field::new(field::ORDER_ID, &format!("ORDER_{}", i)))?;
         msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
         msg.set_field(Field::new(field::SIDE, "1"))?;  // Buy
-        msg.set_field(Field::new(field::ORDER_QTY.to_string(), "100"))?;  // Fixed field name
+        msg.set_field(Field::new(field::ORDER_QTY, "100"))?;
         msg.set_field(Field::new(field::PRICE, "150.50"))?;
         msg.set_field(Field::new(field::ORD_TYPE, "2"))?;  // Limit order
         // Message will be automatically returned to pool when dropped
@@ -87,7 +87,18 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     let session = engine.get_session("RECOVERY_CLIENT_RECOVERY_SERVER").await?;
     session.disconnect().await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Test aggressive reconnection
+    for _ in 0..3 {
+        session.recover().await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        session.disconnect().await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Final recovery attempt
     session.recover().await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Test 4: Resend request handling
     println!("Testing resend request handling...");
@@ -95,8 +106,10 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     for i in 1..=3 {
         let mut msg = message_pool.get_message(field::values::MARKET_DATA_REQUEST).await;
         msg.set_field(Field::new(field::MD_REQ_ID, &format!("MDR_{}", i)))?;
-        msg.set_field(Field::new(field::SUBSCRIPTION_REQ_TYPE, "1"))?;  // Fixed field name
+        msg.set_field(Field::new(field::SUBSCRIPTION_REQ_TYPE, "1"))?;
         msg.set_field(Field::new(field::MARKET_DEPTH, "0"))?;
+        msg.set_field(Field::new(field::NO_MD_ENTRIES, "2"))?;
+        msg.set_field(Field::new(field::SYMBOL, "AAPL"))?;
         // Intentionally skip some sequence numbers
         if i != 2 {
             // Message will be returned to pool when dropped
@@ -108,6 +121,22 @@ async fn test_recovery_scenarios(engine: &FixEngine) -> Result<(), Box<dyn std::
     session.logout().await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     session.recover().await?;
+
+    // Test 6: Invalid state transitions
+    println!("Testing invalid state transitions...");
+    // Try to recover while already connected
+    let recover_result = session.recover().await;
+    assert!(recover_result.is_err(), "Recovery while connected should fail");
+
+    // Test 7: Multiple sequential recoveries
+    println!("Testing multiple sequential recoveries...");
+    for i in 1..=3 {
+        println!("Recovery attempt {}", i);
+        session.disconnect().await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        session.recover().await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 
     // Verify final state
     assert!(session.is_connected().await, "Session should be connected after recovery");

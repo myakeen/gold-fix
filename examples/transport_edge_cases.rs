@@ -2,7 +2,6 @@ use goldfix::{
     FixEngine,
     config::{EngineConfig, SessionConfig, LogConfig},
     transport::TransportConfig,
-    message::{Field, field},
 };
 use std::path::PathBuf;
 use std::time::Duration;
