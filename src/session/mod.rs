@@ -14,7 +14,7 @@ use chrono;
 
 pub mod state;
 
-#[derive(Clone)]  // Added Clone derivation
+#[derive(Clone)]
 pub struct Session {
     pub config: SessionConfig,
     state: Arc<Mutex<state::SessionState>>,
@@ -29,7 +29,7 @@ impl Session {
         config: SessionConfig,
         logger: Arc<Logger>,
         store: Arc<MessageStore>,
-        message_pool: Arc<MessagePool>,  // Add message_pool parameter
+        message_pool: Arc<MessagePool>,
     ) -> Self {
         let session_id = format!("{}_{}", config.sender_comp_id, config.target_comp_id);
         let store_dir = PathBuf::from("store/sessions");
@@ -48,7 +48,7 @@ impl Session {
             transport: Arc::new(Mutex::new(None)),
             logger,
             store,
-            message_pool,  // Store message_pool
+            message_pool,
         }
     }
 
@@ -302,7 +302,6 @@ impl Session {
         msg
     }
 
-    // Add recovery functionality to the Session implementation
     pub async fn recover(&self) -> Result<()> {
         let mut state = self.state.lock().await;
 
@@ -386,6 +385,11 @@ impl Session {
 
     pub async fn get_state(&self) -> Result<state::SessionState> {
         Ok(self.state.lock().await.clone())
+    }
+
+    /// Get the session ID in the format "{sender_comp_id}_{target_comp_id}"
+    pub fn session_id(&self) -> String {
+        format!("{}_{}", self.config.sender_comp_id, self.config.target_comp_id)
     }
 }
 

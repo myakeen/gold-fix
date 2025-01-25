@@ -1,5 +1,5 @@
 {
-  "status": "Connecting",
+  "status": "Disconnected",
   "next_outgoing_seq": 1,
   "next_incoming_seq": 1,
   "expected_target_seq_num": 1,

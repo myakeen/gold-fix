@@ -117,13 +117,15 @@ impl MessagePool {
         let stat = stats.entry(msg_type)
             .or_insert_with(PoolStats::new);
 
-        let max_size = self.config.type_specific_sizes
+        // Calculate target and maximum sizes
+        let configured_max = self.config.type_specific_sizes
             .get(&message.msg_type().to_string())
             .copied()
             .unwrap_or(self.config.default_size);
 
-        // Don't add if pool is at or above target size
-        let target_size = (max_size / 2).min(self.config.max_pool_size);
+        let target_size = (configured_max / 2).min(self.config.max_pool_size);
+
+        // Only add message if we're below target size
         if pool.len() < target_size {
             pool.push(message);
             stat.returns += 1;
@@ -131,7 +133,7 @@ impl MessagePool {
             stat.update_peak_size(pool.len());
         }
 
-        // Always ensure pool size is within limits
+        // Enforce cleanup if we're above target size
         if pool.len() > target_size {
             pool.truncate(target_size);
             stat.current_size = pool.len();
@@ -149,11 +151,13 @@ impl MessagePool {
 
         let target_size = new_size.min(self.config.max_pool_size);
 
+        // Grow pool if needed
         while pool.len() < target_size {
             pool.push(Message::new(msg_type));
             stat.total_allocations += 1;
         }
 
+        // Shrink pool if needed
         if pool.len() > target_size {
             pool.truncate(target_size);
         }
