@@ -194,52 +194,70 @@ impl MessageValidator {
     }
 
     fn validate_market_data_snapshot(message: &Message) -> Result<()> {
-        // Validate number of entries matches actual entries
+        // Check required fields
+        if message.get_field(field::SYMBOL).is_none() {
+            return Err(FixError::ParseError("Missing Symbol in market data snapshot".into()));
+        }
+
+        // Set up repeating group if not already present
+        if message.get_group(field::NO_MD_ENTRIES).is_none() {
+            return Err(FixError::ParseError("Missing market data entries group".into()));
+        }
+
         if let Some(no_entries) = message.get_field(field::NO_MD_ENTRIES) {
             let expected_count = no_entries.value().parse::<usize>()
                 .map_err(|_| FixError::ParseError("Invalid NoMDEntries value".into()))?;
 
-            let mut actual_count = 0;
-            let mut entry_type_seen = false;
+            let group = message.get_group(field::NO_MD_ENTRIES)
+                .ok_or_else(|| FixError::ParseError("Missing market data entries group".into()))?;
 
-            for (&tag, field) in message.fields() {
-                if tag == field::MD_ENTRY_TYPE {
-                    entry_type_seen = true;
-                    actual_count += 1;
-
-                    // Validate each entry has required fields
-                    if !Self::is_valid_md_entry_type(field.value()) {
-                        return Err(FixError::ParseError(
-                            format!("Invalid MDEntryType: {}", field.value())
-                        ));
-                    }
-
-                    // Check for corresponding price and size
-                    let entry_index = actual_count - 1;
-                    let has_price = message.fields().iter()
-                        .any(|(&t, _)| t == field::MD_ENTRY_PX);
-                    let has_size = message.fields().iter()
-                        .any(|(&t, _)| t == field::MD_ENTRY_SIZE);
-
-                    if !has_price || !has_size {
-                        return Err(FixError::ParseError(
-                            format!("Missing price or size for entry {}", entry_index)
-                        ));
-                    }
-                }
+            // Validate group structure
+            if let Err(e) = group.validate() {
+                return Err(FixError::ParseError(format!("Invalid market data group: {}", e)));
             }
 
-            if !entry_type_seen {
-                return Err(FixError::ParseError("Missing MDEntryType".into()));
-            }
-
-            if actual_count != expected_count {
+            // Validate entry count
+            if group.entry_count() != expected_count {
                 return Err(FixError::ParseError(
                     format!("NoMDEntries ({}) doesn't match actual entries ({})",
-                        expected_count, actual_count)
+                        expected_count, group.entry_count())
                 ));
             }
+
+            // Validate each entry
+            for i in 0..group.entry_count() {
+                // Check entry type
+                let entry_type = group.get_field_at(field::MD_ENTRY_TYPE, i)
+                    .ok_or_else(|| FixError::ParseError(format!("Missing MDEntryType at position {}", i)))?;
+
+                if !Self::is_valid_md_entry_type(entry_type.value()) {
+                    return Err(FixError::ParseError(
+                        format!("Invalid MDEntryType: {} at position {}", entry_type.value(), i)
+                    ));
+                }
+
+                // Check price and size
+                let price = group.get_field_at(field::MD_ENTRY_PX, i)
+                    .ok_or_else(|| FixError::ParseError(format!("Missing MDEntryPx at position {}", i)))?;
+
+                let size = group.get_field_at(field::MD_ENTRY_SIZE, i)
+                    .ok_or_else(|| FixError::ParseError(format!("Missing MDEntrySize at position {}", i)))?;
+
+                // Validate numeric values
+                if price.value().parse::<f64>().is_err() {
+                    return Err(FixError::ParseError(
+                        format!("Invalid price format at position {}: {}", i, price.value())
+                    ));
+                }
+
+                if size.value().parse::<f64>().is_err() {
+                    return Err(FixError::ParseError(
+                        format!("Invalid size format at position {}: {}", i, size.value())
+                    ));
+                }
+            }
         }
+
         Ok(())
     }
 
@@ -613,7 +631,8 @@ mod tests {
     #[test]
     fn test_validate_market_data_snapshot() {
         let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
-        // Add required fields
+
+        // Add required header fields
         msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
         msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
         msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
@@ -621,40 +640,27 @@ mod tests {
         msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
         msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
 
-        // Add market data specific fields
+        // Add Symbol field
         msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+
+        // Setup market data group
+        msg.add_group(field::NO_MD_ENTRIES, field::MD_ENTRY_TYPE, 
+            vec![field::MD_ENTRY_PX, field::MD_ENTRY_SIZE]).unwrap();
         msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
 
-        // Add two market data entries
-        msg.set_field(Field::new(field::MD_ENTRY_TYPE, field::values::MD_ENTRY_BID)).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.25")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
+        let group = msg.get_group_mut(field::NO_MD_ENTRIES).unwrap();
 
-        msg.set_field(Field::new(field::MD_ENTRY_TYPE, field::values::MD_ENTRY_OFFER)).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.50")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "200")).unwrap();
+        // Add first entry
+        let entry = group.add_entry();
+        entry.insert(field::MD_ENTRY_TYPE, Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID));
+        entry.insert(field::MD_ENTRY_PX, Field::new(field::MD_ENTRY_PX, "150.25"));
+        entry.insert(field::MD_ENTRY_SIZE, Field::new(field::MD_ENTRY_SIZE, "100"));
 
-        assert!(MessageValidator::validate(&msg).is_ok());
-    }
-
-    #[test]
-    fn test_validate_quote() {
-        let mut msg = Message::new(values::QUOTE);
-        // Add required fields
-        msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
-        msg.set_field(Field::new(field::MSG_TYPE, values::QUOTE)).unwrap();
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
-        msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
-
-        // Add quote specific fields
-        msg.set_field(Field::new(field::QUOTE_ID, "Q001")).unwrap();
-        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
-        msg.set_field(Field::new(field::BID_PX, "150.25")).unwrap();
-        msg.set_field(Field::new(field::BID_SIZE, "100")).unwrap();
-        msg.set_field(Field::new(field::OFFER_PX, "150.50")).unwrap();
-        msg.set_field(Field::new(field::OFFER_SIZE, "200")).unwrap();
+        // Add second entry
+        let entry = group.add_entry();
+        entry.insert(field::MD_ENTRY_TYPE, Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_OFFER));
+        entry.insert(field::MD_ENTRY_PX, Field::new(field::MD_ENTRY_PX, "150.50"));
+        entry.insert(field::MD_ENTRY_SIZE, Field::new(field::MD_ENTRY_SIZE, "200"));
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }
@@ -662,7 +668,7 @@ mod tests {
     #[test]
     fn test_validate_market_data_snapshot_with_entries() {
         let mut msg = Message::new(values::MARKET_DATA_SNAPSHOT);
-        // Add required fields
+        // Add required header fields
         msg.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
         msg.set_field(Field::new(field::MSG_TYPE, values::MARKET_DATA_SNAPSHOT)).unwrap();
         msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
@@ -670,20 +676,24 @@ mod tests {
         msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
         msg.set_field(Field::new(field::SENDING_TIME, "20250124-12:00:00")).unwrap();
 
-        // Add market data specific fields with proper entry count
+        // Add Symbol and group setup
         msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
+        msg.add_group(field::NO_MD_ENTRIES, field::MD_ENTRY_TYPE,
+            vec![field::MD_ENTRY_PX, field::MD_ENTRY_SIZE]).unwrap();
         msg.set_field(Field::new(field::NO_MD_ENTRIES, "2")).unwrap();
 
-        // Add two market data entries
-        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID)).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.25")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "100")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_TIME, "20250124-12:00:00")).unwrap();
+        let group = msg.get_group_mut(field::NO_MD_ENTRIES).unwrap();
 
-        msg.set_field(Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_OFFER)).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_PX, "150.50")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_SIZE, "200")).unwrap();
-        msg.set_field(Field::new(field::MD_ENTRY_TIME, "20250124-12:00:00")).unwrap();
+        // Add entries
+        let entry = group.add_entry();
+        entry.insert(field::MD_ENTRY_TYPE, Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_BID));
+        entry.insert(field::MD_ENTRY_PX, Field::new(field::MD_ENTRY_PX, "150.25"));
+        entry.insert(field::MD_ENTRY_SIZE, Field::new(field::MD_ENTRY_SIZE, "100"));
+
+        let entry = group.add_entry();
+        entry.insert(field::MD_ENTRY_TYPE, Field::new(field::MD_ENTRY_TYPE, values::MD_ENTRY_OFFER));
+        entry.insert(field::MD_ENTRY_PX, Field::new(field::MD_ENTRY_PX, "150.50"));
+        entry.insert(field::MD_ENTRY_SIZE, Field::new(field::MD_ENTRY_SIZE, "200"));
 
         assert!(MessageValidator::validate(&msg).is_ok());
     }

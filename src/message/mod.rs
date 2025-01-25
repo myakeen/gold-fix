@@ -3,23 +3,26 @@ pub mod parser;
 pub mod validator;
 pub mod formatter;
 pub mod pool;
+pub mod group;
 
 use chrono;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::fmt;
-pub use field::Field;
-use crate::Result;
+pub use self::field::Field;
 use crate::message::parser::MessageParser;
+use crate::Result;
 use crate::error::FixError;
 use crate::message::formatter::FieldFormatter;
-pub use pool::MessagePool;  // Export MessagePool
+pub use self::pool::MessagePool;
+use self::group::RepeatingGroup;
 
 #[derive(Clone)]
 pub struct Message {
     fields: HashMap<i32, Field>,
     msg_type: String,
     formatters: HashMap<i32, Arc<dyn FieldFormatter>>,
+    groups: HashMap<i32, RepeatingGroup>,
 }
 
 impl fmt::Debug for Message {
@@ -27,6 +30,7 @@ impl fmt::Debug for Message {
         f.debug_struct("Message")
             .field("fields", &self.fields)
             .field("msg_type", &self.msg_type)
+            .field("groups", &self.groups)
             .finish_non_exhaustive() // Skip formatters field in Debug output
     }
 }
@@ -37,6 +41,7 @@ impl Message {
             fields: HashMap::new(),
             msg_type: msg_type.to_string(),
             formatters: HashMap::new(),
+            groups: HashMap::new(),
         };
         msg.set_default_headers();
         msg
@@ -52,17 +57,17 @@ impl Message {
 
     fn set_default_headers(&mut self) {
         // Set BeginString
-        self.set_field(Field::new(field::BEGIN_STRING, "FIX.4.2")).unwrap();
+        self.set_field(Field::new(self::field::BEGIN_STRING, "FIX.4.2")).unwrap();
         // Set MsgType
-        self.set_field(Field::new(field::MSG_TYPE, &self.msg_type)).unwrap();
+        self.set_field(Field::new(self::field::MSG_TYPE, &self.msg_type)).unwrap();
         // Set SendingTime
         let timestamp = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
-        self.set_field(Field::new(field::SENDING_TIME, timestamp)).unwrap();
+        self.set_field(Field::new(self::field::SENDING_TIME, timestamp)).unwrap();
         // Set default sender and target comp ids
-        self.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
-        self.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
+        self.set_field(Field::new(self::field::SENDER_COMP_ID, "SENDER")).unwrap();
+        self.set_field(Field::new(self::field::TARGET_COMP_ID, "TARGET")).unwrap();
         // Set initial sequence number
-        self.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        self.set_field(Field::new(self::field::MSG_SEQ_NUM, "1")).unwrap();
     }
 
     pub fn set_field(&mut self, field: Field) -> Result<()> {
@@ -93,7 +98,7 @@ impl Message {
         let mut msg = String::new();
 
         // Start with BeginString (tag 8)
-        if let Some(begin_str) = self.get_field(field::BEGIN_STRING) {
+        if let Some(begin_str) = self.get_field(self::field::BEGIN_STRING) {
             msg.push_str(&format!("8={}\u{1}", begin_str.value()));
         } else {
             return Err(FixError::ParseError("Missing BeginString".into()));
@@ -111,7 +116,7 @@ impl Message {
 
         // Add all other fields except BeginString, BodyLength, and Checksum
         for (&tag, field) in sorted_fields.iter() {
-            if tag != field::BEGIN_STRING && tag != field::BODY_LENGTH && tag != field::CHECKSUM {
+            if tag != self::field::BEGIN_STRING && tag != self::field::BODY_LENGTH && tag != self::field::CHECKSUM {
                 msg.push_str(&format!("{}={}\u{1}", tag, field.value()));
             }
         }
@@ -130,6 +135,38 @@ impl Message {
 
         Ok(msg)
     }
+
+    pub fn add_group(&mut self, tag: i32, delimiter_tag: i32, required_tags: Vec<i32>) -> Result<()> {
+        let group = RepeatingGroup::new(delimiter_tag, required_tags);
+        self.groups.insert(tag, group);
+        Ok(())
+    }
+
+    pub fn get_group(&self, tag: i32) -> Option<&RepeatingGroup> {
+        self.groups.get(&tag)
+    }
+
+    pub fn get_group_mut(&mut self, tag: i32) -> Option<&mut RepeatingGroup> {
+        self.groups.get_mut(&tag)
+    }
+
+    pub fn get_field_at(&self, tag: i32, position: usize) -> Option<&Field> {
+        if let Some(group) = self.groups.values().find(|g| g.has_field(tag)) {
+            group.get_field_at(tag, position)
+        } else {
+            self.fields.get(&tag)
+        }
+    }
+
+    pub fn set_field_at(&mut self, position: usize, field: Field) -> Result<()> {
+        let tag = field.tag();
+        if let Some(group) = self.groups.values_mut().find(|g| g.has_field(tag)) {
+            group.set_field_at(position, field)
+        } else {
+            self.fields.insert(tag, field);
+            Ok(())
+        }
+    }
 }
 
 fn calculate_checksum(msg: &str) -> u32 {
@@ -145,20 +182,20 @@ mod tests {
     #[test]
     fn test_message_creation() {
         let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
-        msg.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
-        msg.set_field(Field::new(field::SIDE, values::BUY)).unwrap();
+        msg.set_field(Field::new(super::field::CL_ORD_ID, "12345")).unwrap();
+        msg.set_field(Field::new(super::field::SYMBOL, "AAPL")).unwrap();
+        msg.set_field(Field::new(super::field::SIDE, values::BUY)).unwrap();
 
         assert_eq!(msg.msg_type(), values::NEW_ORDER_SINGLE);
-        assert_eq!(msg.get_field(field::SYMBOL).unwrap().value(), "AAPL");
+        assert_eq!(msg.get_field(super::field::SYMBOL).unwrap().value(), "AAPL");
     }
 
     #[test]
     fn test_message_serialization() {
         let mut msg = Message::new(values::HEARTBEAT);
-        msg.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
-        msg.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
-        msg.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        msg.set_field(Field::new(super::field::SENDER_COMP_ID, "SENDER")).unwrap();
+        msg.set_field(Field::new(super::field::TARGET_COMP_ID, "TARGET")).unwrap();
+        msg.set_field(Field::new(super::field::MSG_SEQ_NUM, "1")).unwrap();
 
         let result = msg.to_string();
         assert!(result.is_ok());
@@ -172,39 +209,39 @@ mod tests {
     #[test]
     fn test_field_access() {
         let mut msg = Message::new(values::NEW_ORDER_SINGLE);
-        msg.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
+        msg.set_field(Field::new(super::field::CL_ORD_ID, "12345")).unwrap();
 
         let fields = msg.fields();
-        assert!(fields.contains_key(&field::CL_ORD_ID));
-        assert!(fields.contains_key(&field::BEGIN_STRING));
-        assert!(fields.contains_key(&field::MSG_TYPE));
+        assert!(fields.contains_key(&super::field::CL_ORD_ID));
+        assert!(fields.contains_key(&super::field::BEGIN_STRING));
+        assert!(fields.contains_key(&super::field::MSG_TYPE));
     }
 
     #[test]
     fn test_message_roundtrip() {
         let mut original = Message::new(values::NEW_ORDER_SINGLE);
-        original.set_field(Field::new(field::CL_ORD_ID, "12345")).unwrap();
-        original.set_field(Field::new(field::SYMBOL, "AAPL")).unwrap();
-        original.set_field(Field::new(field::SIDE, values::BUY)).unwrap();
-        original.set_field(Field::new(field::SENDER_COMP_ID, "SENDER")).unwrap();
-        original.set_field(Field::new(field::TARGET_COMP_ID, "TARGET")).unwrap();
-        original.set_field(Field::new(field::MSG_SEQ_NUM, "1")).unwrap();
+        original.set_field(Field::new(super::field::CL_ORD_ID, "12345")).unwrap();
+        original.set_field(Field::new(super::field::SYMBOL, "AAPL")).unwrap();
+        original.set_field(Field::new(super::field::SIDE, values::BUY)).unwrap();
+        original.set_field(Field::new(super::field::SENDER_COMP_ID, "SENDER")).unwrap();
+        original.set_field(Field::new(super::field::TARGET_COMP_ID, "TARGET")).unwrap();
+        original.set_field(Field::new(super::field::MSG_SEQ_NUM, "1")).unwrap();
 
         let msg_str = original.to_string().unwrap();
         let parsed = Message::from_string(&msg_str).unwrap();
 
         assert_eq!(parsed.msg_type(), original.msg_type());
         assert_eq!(
-            parsed.get_field(field::CL_ORD_ID).unwrap().value(),
-            original.get_field(field::CL_ORD_ID).unwrap().value()
+            parsed.get_field(super::field::CL_ORD_ID).unwrap().value(),
+            original.get_field(super::field::CL_ORD_ID).unwrap().value()
         );
         assert_eq!(
-            parsed.get_field(field::SYMBOL).unwrap().value(),
-            original.get_field(field::SYMBOL).unwrap().value()
+            parsed.get_field(super::field::SYMBOL).unwrap().value(),
+            original.get_field(super::field::SYMBOL).unwrap().value()
         );
         assert_eq!(
-            parsed.get_field(field::SIDE).unwrap().value(),
-            original.get_field(field::SIDE).unwrap().value()
+            parsed.get_field(super::field::SIDE).unwrap().value(),
+            original.get_field(super::field::SIDE).unwrap().value()
         );
     }
 
@@ -213,20 +250,20 @@ mod tests {
         let mut msg = Message::new(values::NEW_ORDER_SINGLE);
 
         // Add formatters
-        msg.set_formatter(field::SENDING_TIME, DateTimeFormatter);
-        msg.set_formatter(field::PRICE, DecimalFormatter::new(2));
+        msg.set_formatter(super::field::SENDING_TIME, DateTimeFormatter);
+        msg.set_formatter(super::field::PRICE, DecimalFormatter::new(2));
 
         // Set fields with formatting
-        msg.set_field(Field::new(field::SENDING_TIME, "2025-01-24T12:34:56Z")).unwrap();
-        msg.set_field(Field::new(field::PRICE, "123.456")).unwrap();
+        msg.set_field(Field::new(super::field::SENDING_TIME, "2025-01-24T12:34:56Z")).unwrap();
+        msg.set_field(Field::new(super::field::PRICE, "123.456")).unwrap();
 
         // Verify formatted values
         assert_eq!(
-            msg.get_field(field::SENDING_TIME).unwrap().value(),
+            msg.get_field(super::field::SENDING_TIME).unwrap().value(),
             "20250124-12:34:56"
         );
         assert_eq!(
-            msg.get_field(field::PRICE).unwrap().value(),
+            msg.get_field(super::field::PRICE).unwrap().value(),
             "123.46"
         );
     }

@@ -42,14 +42,14 @@ pub struct PoolStats {
 }
 
 impl PoolStats {
-    fn new(initial_size: usize) -> Self {
+    fn new() -> Self {
         PoolStats {
             hits: 0,
             misses: 0,
             returns: 0,
-            current_size: initial_size,
-            peak_size: initial_size,
-            total_allocations: initial_size,
+            current_size: 0,
+            peak_size: 0,
+            total_allocations: 0,
         }
     }
 
@@ -72,28 +72,13 @@ impl MessagePool {
     }
 
     pub fn with_config(config: PoolConfig) -> Self {
-        let mut pools = HashMap::new();
-        let mut stats = HashMap::new();
-
-        // Initialize pools for common message types
-        for msg_type in values::COMMON_MESSAGE_TYPES.iter() {
-            let size = config.type_specific_sizes
-                .get(*msg_type)
-                .copied()
-                .unwrap_or(config.default_size);
-
-            let mut messages = Vec::with_capacity(size);
-            for _ in 0..size {
-                messages.push(Message::new(msg_type));
-            }
-            pools.insert(msg_type.to_string(), messages);
-            stats.insert(msg_type.to_string(), PoolStats::new(size));
-        }
+        let pools = Arc::new(Mutex::new(HashMap::new()));
+        let stats = Arc::new(Mutex::new(HashMap::new()));
 
         MessagePool {
-            pools: Arc::new(Mutex::new(pools)),
+            pools,
             config,
-            stats: Arc::new(Mutex::new(stats)),
+            stats,
         }
     }
 
@@ -105,7 +90,7 @@ impl MessagePool {
             .or_insert_with(Vec::new);
 
         let stat = stats.entry(msg_type.to_string())
-            .or_insert_with(|| PoolStats::new(0));
+            .or_insert_with(PoolStats::new);
 
         match pool.pop() {
             Some(message) => {
@@ -126,53 +111,61 @@ impl MessagePool {
         let mut stats = self.stats.lock().await;
         let msg_type = message.msg_type().to_string();
 
-        let pool = pools.entry(msg_type.clone()).or_insert_with(Vec::new);
-        let stat = stats.entry(msg_type).or_insert_with(|| PoolStats::new(0));
+        let pool = pools.entry(msg_type.clone())
+            .or_insert_with(Vec::new);
+
+        let stat = stats.entry(msg_type)
+            .or_insert_with(PoolStats::new);
 
         let max_size = self.config.type_specific_sizes
             .get(&message.msg_type().to_string())
             .copied()
             .unwrap_or(self.config.default_size);
 
-        if pool.len() < max_size && pool.len() < self.config.max_pool_size {
+        // Don't add if pool is at or above target size
+        let target_size = (max_size / 2).min(self.config.max_pool_size);
+        if pool.len() < target_size {
             pool.push(message);
             stat.returns += 1;
             stat.current_size = pool.len();
-            stat.update_peak_size(pool.capacity());
+            stat.update_peak_size(pool.len());
+        }
 
-            // Simple cleanup: if pool is too large, remove some messages
-            if pool.len() > max_size / 2 {
-                pool.truncate(max_size / 2);
-                stat.current_size = pool.len();
-            }
+        // Always ensure pool size is within limits
+        if pool.len() > target_size {
+            pool.truncate(target_size);
+            stat.current_size = pool.len();
         }
     }
 
     pub async fn resize_pool(&self, msg_type: &str, new_size: usize) {
         let mut pools = self.pools.lock().await;
         let mut stats = self.stats.lock().await;
-        let target_size = new_size.min(self.config.max_pool_size);
 
         let pool = pools.entry(msg_type.to_string())
             .or_insert_with(Vec::new);
         let stat = stats.entry(msg_type.to_string())
-            .or_insert_with(|| PoolStats::new(0));
+            .or_insert_with(PoolStats::new);
 
-        if pool.len() < target_size {
-            for _ in pool.len()..target_size {
-                pool.push(Message::new(msg_type));
-            }
-        } else {
+        let target_size = new_size.min(self.config.max_pool_size);
+
+        while pool.len() < target_size {
+            pool.push(Message::new(msg_type));
+            stat.total_allocations += 1;
+        }
+
+        if pool.len() > target_size {
             pool.truncate(target_size);
         }
 
         stat.current_size = pool.len();
-        stat.update_peak_size(pool.capacity());
+        stat.update_peak_size(pool.len());
     }
 
     pub async fn get_stats(&self, msg_type: &str) -> Option<PoolStats> {
         self.stats.lock().await.get(msg_type).cloned()
     }
+
     pub async fn ensure_capacity(&self, msg_type: &str, capacity: usize) {
         self.resize_pool(msg_type, capacity).await;
     }
@@ -203,7 +196,7 @@ mod tests {
     async fn test_pool_resize() {
         let pool = MessagePool::new();
 
-        // Initial capacity
+        // Initial resize to 5
         pool.resize_pool(values::QUOTE_REQUEST, 5).await;
         let stats = pool.get_stats(values::QUOTE_REQUEST).await.unwrap();
         assert_eq!(stats.current_size, 5);
@@ -246,25 +239,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pool_stress() {
-        let pool = MessagePool::new();
-        let msg_type = values::MARKET_DATA_SNAPSHOT;
-        let iterations = 1000;
-
-        // Repeatedly get and return messages
-        for _ in 0..iterations {
-            let msg = pool.get_message(msg_type).await;
-            pool.return_message(msg).await;
-        }
-
-        let stats = pool.get_stats(msg_type).await.unwrap();
-        assert!(stats.hits > 0, "Should have some cache hits after {} iterations", iterations);
-        assert!(stats.current_size > 0, "Pool should maintain some messages");
-        assert!(stats.current_size <= pool.config.max_pool_size, 
-            "Pool size should not exceed maximum");
-    }
-
-    #[tokio::test]
     async fn test_pool_stats_tracking() {
         let pool = MessagePool::new();
         let msg_type = values::NEW_ORDER_SINGLE;
@@ -281,5 +255,24 @@ mod tests {
         let stats = pool.get_stats(msg_type).await.unwrap();
         assert_eq!(stats.hits, 1, "Second get should be a hit");
         assert_eq!(stats.returns, 1, "Should have one return");
+    }
+
+    #[tokio::test]
+    async fn test_pool_stress() {
+        let pool = MessagePool::new();
+        let msg_type = values::MARKET_DATA_SNAPSHOT;
+        let iterations = 1000;
+
+        // Repeatedly get and return messages
+        for _ in 0..iterations {
+            let msg = pool.get_message(msg_type).await;
+            pool.return_message(msg).await;
+        }
+
+        let stats = pool.get_stats(msg_type).await.unwrap();
+        assert!(stats.hits > 0, "Should have some cache hits after {} iterations", iterations);
+        assert!(stats.current_size > 0, "Pool should maintain some messages");
+        assert!(stats.current_size <= pool.config.max_pool_size, 
+            "Pool size should not exceed maximum");
     }
 }
